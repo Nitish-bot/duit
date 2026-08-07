@@ -1,0 +1,3 @@
+# Use Firestore as the only persisted task store
+
+Duit will use Cloud Firestore as its durable source of truth and the Firestore Android SDK's persistent cache as its offline operational store. It will not add Room or a separate synchronization layer in v1: one primary phone per Member, a tiny two-person dataset, owner-only Task writes, and Firestore's queued offline writes do not justify duplicating the data model and building the project's most failure-prone subsystem. Cloud Functions used for Pair lifecycle and Cheer delivery do not become another Task store. This decision should be revisited only if concurrent multi-device use, complex local querying, or measured cache limitations become real requirements.

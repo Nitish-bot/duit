@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Duit</string>
+    <string name="brand_name">duit</string>
+
+    <string name="destination_today">Today</string>
+    <string name="destination_together">Together</string>
+    <string name="destination_plan">Plan</string>
+    <string name="destination_tasks">Tasks</string>
+
+    <string name="today_intro">Make room for what matters, one Task at a time.</string>
+    <string name="today_empty_title">Your day is clear</string>
+    <string name="today_empty_body">When Tasks are ready, they’ll settle here without noise.</string>
+
+    <string name="together_intro">A calm window into what your Partner chooses to share.</string>
+    <string name="together_empty_title">Just the two of you</string>
+    <string name="together_empty_body">Shared Tasks and little moments of encouragement will live here.</string>
+
+    <string name="plan_intro">Look across the week without turning every day into a score.</string>
+    <string name="plan_empty_title">A gentler week</string>
+    <string name="plan_empty_body">Planned work will gather here by day.</string>
+
+    <string name="tasks_intro">Everything you choose to keep, in one quiet library.</string>
+    <string name="tasks_empty_title">A home for your Tasks</string>
+    <string name="tasks_empty_body">Active, repeating, Anytime, and archived Tasks will stay easy to find.</string>
+</resources>

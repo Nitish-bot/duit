@@ -1,0 +1,3 @@
+# Optimize conflict handling for one primary phone
+
+Each Member account is designed for one primary phone; replacement and recovery are normal, simultaneous editing is exceptional. A Partner may read Shared Tasks but is never another Task writer. Duit will preserve immutable effective-dated definition revisions and deletion tombstones, while direct edits to occurrence outcomes use Firestore's document-level last-write-wins behavior. Concurrent definition branches remain detectable and recoverable, but Duit will not build an operation log, event-sourced history, or general-purpose multi-device merge UI unless real usage invalidates the one-primary-phone-per-Member assumption.

@@ -1,0 +1,29 @@
+.DS_Store
+.gradle/
+.kotlin/
+.idea/
+build/
+**/build/
+local.properties
+captures/
+*.iml
+
+# Android signing and Firebase runtime configuration are provisioned outside Git.
+*.jks
+*.keystore
+app/google-services.json
+app/src/*/google-services.json
+
+# Firebase Emulator and Functions generated state.
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+functions/node_modules/
+functions/lib/
+functions/coverage/
+
+# Local environment files.
+.env
+.env.*
+!.env.example
