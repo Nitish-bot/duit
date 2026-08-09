@@ -8,7 +8,43 @@
     <string name="destination_plan">Plan</string>
     <string name="destination_tasks">Tasks</string>
 
+    <string name="access_sign_in_title">Sign in to Duit</string>
+    <string name="access_sign_in_body">Use the Google account you want to use as your individual Duit account.</string>
+    <string name="access_sign_in_google">Sign in with Google</string>
+
+    <string name="access_approval_title">Approval needed</string>
+    <string name="access_approval_body">This Google account is signed in, but the development Firebase project has not approved it yet.</string>
+    <string name="access_approval_uid_label">Firebase UID</string>
+    <string name="access_approval_step_open_console">1. Open Firestore Database in the development Firebase console.</string>
+    <string name="access_approval_step_create_document">2. Create the document /memberApprovals/%1$s.</string>
+    <string name="access_approval_step_set_field">3. Add a Boolean field named approved and set it to true.</string>
+    <string name="access_approval_step_retry">4. Return here and tap Retry.</string>
+    <string name="access_approval_check_failed_title">Couldn’t verify access</string>
+    <string name="access_approval_check_failed_body">Nothing was changed. Duit couldn’t verify whether this account is approved.</string>
+
+    <string name="access_hydrating_title">Setting up your workspace</string>
+    <string name="access_hydrating_body">Your Tasks stay locked while Duit loads the server workspace.</string>
+    <string name="access_hydrating_progress_description">Loading workspace</string>
+
+    <string name="access_failed_title">Couldn’t load your workspace</string>
+    <string name="access_failed_body">Nothing was changed. Your Tasks are still safe.</string>
+    <string name="access_sign_out_failed_title">Couldn’t sign out safely</string>
+    <string name="access_sign_out_failed_body">Duit kept this workspace locked because pending changes, private cached data, or account sign-in state could not be cleared. Reconnect, then tap Retry or Sign out to finish safely.</string>
+    <string name="access_signing_out_title">Signing out safely</string>
+    <string name="access_signing_out_body">Duit is backing up pending changes and clearing this account’s private data from the phone.</string>
+    <string name="access_signing_out_progress_description">Signing out safely</string>
+    <string name="access_retry">Retry</string>
+    <string name="access_sign_out">Sign out</string>
+
+    <string name="firebase_runtime_unavailable">Firebase is not configured for this build.</string>
+    <string name="firebase_no_google_account">No Google account is available on this phone.</string>
+    <string name="firebase_sign_in_failed">Google sign-in didn’t finish. Check your connection and try again.</string>
+
     <string name="today_intro">Make room for what matters, one Task at a time.</string>
+    <string name="today_task_title_label">Task title</string>
+    <string name="today_task_private_note">New Tasks start private.</string>
+    <string name="today_add_task">Add Task</string>
+    <string name="task_creation_failed">Duit couldn’t add that Task. Your existing Tasks are unchanged.</string>
     <string name="today_empty_title">Your day is clear</string>
     <string name="today_empty_body">When Tasks are ready, they’ll settle here without noise.</string>
 

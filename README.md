@@ -1,10 +1,17 @@
 # Duit
 
-Duit is an Android app for two people to manage their own days, share selected Tasks, and encourage each other without monitoring or engagement pressure.
+Duit is an Android app for individuals to manage their own days and optionally Pair with one Partner to share selected Tasks and encourage each other without monitoring or engagement pressure.
 
 ## Prerequisites
 
 - JDK 21. The repository pins this version in `.java-version` because the local Firestore Emulator requires Java 21 or newer. Android source compatibility and Kotlin/JVM output remain targeted to Java 17.
+
+  On Apple Silicon macOS, one way to install and select it for the current terminal is:
+
+  ```sh
+  brew install openjdk@21
+  export JAVA_HOME="$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home"
+  ```
 - Android SDK Platform 36, Android SDK Build-Tools 35.0.0, and Platform-Tools. AGP 8.13 uses Build-Tools 35.0.0 by default. Install them from Android Studio's SDK Manager, or with the Android command-line tools:
 
   ```sh
@@ -61,6 +68,36 @@ The APK is written to `app/build/outputs/apk/dev/debug/app-dev-debug.apk`. With 
 ./gradlew :app:installDevDebug
 ```
 
+## Development Firebase
+
+Production Firebase is deliberately not required during development. Use a separate development Firebase project and configure only the `dev` flavor:
+
+1. In Firebase, register an Android app with package name `com.gaylord.duit.dev`.
+2. Print the current machine's debug signing fingerprints:
+
+   ```sh
+   ./gradlew :app:signingReport
+   ```
+
+   Add both the SHA-1 and SHA-256 values for the `devDebug` variant to that Firebase Android app. Each developer machine may have a different debug certificate.
+3. Enable Google as a Firebase Authentication sign-in provider and create the development Firestore database.
+4. Download that Android app's `google-services.json` to `app/src/dev/google-services.json`. This path is ignored by Git. Never add a production configuration or point the `prod` flavor at this development project.
+5. Sign the Firebase CLI into the Google account that owns only the development project, then deploy just the Firestore Rules. Replace the placeholder with the project ID shown in the development `google-services.json` or Firebase Console:
+
+   ```sh
+   ./functions/node_modules/.bin/firebase login
+   ./functions/node_modules/.bin/firebase deploy --config firebase.json \
+     --only firestore:rules --project <development-project-id>
+   ```
+
+   This does not deploy Functions and must never target the production project.
+6. Build and install `devDebug`, then sign in once. The first sign-in creates a Firebase Authentication user, but it does not grant access to Duit data.
+7. Copy the Firebase UID shown on Duit's **Approval needed** screen. The same UID also appears under **Authentication → Users** in Firebase Console.
+8. In Firestore, create document `/memberApprovals/<UID>` with one Boolean field named `approved` set to `true`. Approval records are administered in Firebase Console; Android clients can inspect only their own record and can never list or modify approvals.
+9. Return to Duit and tap **Retry**. The app then performs its first server hydration. A completed read of an empty workspace is a valid new Member workspace and enables private Task creation.
+
+Repeat steps 6–9 for any additional development Member. Approving another UID requires no app, Rules, or Functions redeployment. Pairing remains optional; each approved Member owns a private workspace whether paired or not.
+
 ## Functions and Firebase Emulator Suite
 
 Type-check the Functions package:
@@ -69,11 +106,19 @@ Type-check the Functions package:
 npm --prefix functions run typecheck
 ```
 
-Run its automated test. This builds the Functions package, starts both the Functions and Firestore Emulators for the local-only `demo-duit` project, runs the smoke test, and shuts the emulators down:
+Run its automated test. This builds the Functions package, starts both the Functions and Firestore Emulators for the local-only `demo-duit` project, checks the emulator-only Function plus Member Approval/owner-isolation Rules, and shuts the emulators down:
 
 ```sh
 npm --prefix functions test
 ```
+
+With an authorized Android device or Emulator connected, run the Android Firestore repository conformance test separately:
+
+```sh
+npm --prefix functions run test:android-repository
+```
+
+That command starts a dedicated local Firestore Emulator, installs only the repository test, and temporarily configures `adb reverse` so the device can reach it. Its permissive test Rules exist only to seed malformed documents and must never be deployed. Ordinary `connectedDevDebugAndroidTest` runs skip this class unless the dedicated command opts in.
 
 For an interactive emulator session, keep this running:
 

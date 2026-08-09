@@ -2,11 +2,11 @@
 
 ## 1. Product promise and boundaries
 
-Duit should help two people manage their own days, share what they are comfortable sharing, encourage each other, and leave. It is a polished personal tool for one couple, not a collaborative productivity platform. It supports important personal obligations but is not a medical, emergency, or safety-critical alarm system.
+Duit should help approved individuals manage their own days and, when they choose a Partner, share what they are comfortable sharing, encourage each other, and leave. It is a polished personal tool with optional one-to-one Pairing, not a collaborative productivity platform. It supports important personal obligations but is not a medical, emergency, or safety-critical alarm system.
 
-The first production version includes task titles, plain-text notes, reorderable subtasks, all required date/recurrence forms, history, Focus, reminders, Google sign-in, offline use, cloud recovery, manual export/restore, a two-member Pair, Shared and Private Tasks, and lightweight preset Cheers. It deliberately excludes projects, tags, priorities, attachments, shared ownership, task assignment, free-form messaging, more than two Members, streaks, scores, analytics, arbitrary calendar rules, guest mode, and a biometric app lock.
+The first production version includes task titles, plain-text notes, reorderable subtasks, all required date/recurrence forms, history, Focus, reminders, Google sign-in plus administrator approval, offline use, cloud recovery, manual export/restore, optional two-Member Pairs, Shared and Private Tasks, and lightweight preset Cheers. It deliberately excludes projects, tags, priorities, attachments, shared ownership, task assignment, free-form messaging, Pairs larger than two Members, multiple active Partners per Member, streaks, scores, analytics, arbitrary calendar rules, guest mode, and a biometric app lock.
 
-Each person signs in with a separate Google account and normally uses one primary phone. Exactly two accounts may form one Pair. Every Task has one Owner: the Partner may read its deliberately redacted Shared View but may never edit, complete, reschedule, Focus, archive, or delete it. Private Tasks remain inaccessible to the Partner.
+Each approved Member has an independently owned private workspace and normally uses one primary phone. A Member may remain unpaired or join at most one active Pair; each Pair contains exactly two distinct approved Members, and many independent Pairs may coexist. Every Task starts Private and has one Owner: only an explicit Owner choice creates a Pair-bound Shared View, which the Partner may read but never edit, complete, reschedule, Focus, archive, or delete.
 
 ## 2. Experience architecture
 
@@ -57,7 +57,7 @@ Do not expose eight technical task types. The editor composes two understandable
 - **When:** On a date / By a deadline / Anytime.
 - **Repeat:** Never / Daily / Selected weekdays / Monthly dates / Yearly dates / Custom.
 
-Fast add requires only a title. Notes, Subtasks, recurrence, miss policy, and one optional reminder appear through progressive disclosure. While paired, the compact fast-add surface itself always shows **Visible to [Partner name]** or **Only me** before submission, including with TalkBack and 200% text; privacy must not be hidden behind expansion or an overflow menu.
+Fast add requires only a title. Notes, Subtasks, recurrence, miss policy, and one optional reminder appear through progressive disclosure. Every new Task defaults to **Only me**. While paired, the compact fast-add surface itself always shows **Only me** or **Share with [Partner name]** before submission, including with TalkBack and 200% text; privacy must not be hidden behind expansion or an overflow menu.
 
 For a recurring occurrence, editing offers only **This occurrence** and **This and future**. The former creates an exception; the latter starts a new effective series revision. Past occurrence snapshots do not change when the definition changes.
 
@@ -65,14 +65,14 @@ Subtasks are lightweight checklist rows without their own dates or reminders. A 
 
 ### Pairing and privacy behavior
 
-- A Member may belong to at most one active Pair, and a Pair has exactly two Members. One Member creates a short-lived, one-use Pair Invite; entering the code creates a pending match, not an active Pair. Both people see the other's Google display identity and explicitly confirm while online before the Pair activates.
-- Before pairing, all Tasks are Private. After pairing, newly created Tasks default to Shared, matching the requested relationship model.
+- Pairing is optional. A Member may belong to at most one active Pair, each Pair has exactly two distinct approved Members, and many independent Pairs may coexist. One Member creates a short-lived, one-use Pair Invite; entering the code creates a pending match, not an active Pair. Both people see the other's Google display identity and explicitly confirm while online before the Pair activates.
+- Every Task starts Private, whether its Owner is unpaired or paired. Sharing requires the Owner to choose **Share with [Partner]**, which creates `Shared(pairId, shareGeneration)` deliberately.
 - Existing Tasks never become Shared automatically when a Pair forms. Pairing ends with an explicit review where the Owner may select older Tasks to share; this prevents accidentally exposing history.
 - Shared is bound to the active `pairId`, not to “whoever is paired later.” Unpairing immediately revokes cross-account server access. Previously Shared Tasks are treated as Private and are not automatically exposed to a future Pair.
 - Every Private-to-Shared transition creates a new Share Grant generation. Cheers from an earlier grant stay hidden if the Task is re-shared, even to the same Partner, unless the Partner deliberately sends a new Cheer.
 - Changing Shared to Private revokes future server reads of the Task tree as soon as the write reaches Firestore. The Partner UI removes it after reconnecting, but Duit cannot retract information already seen, erase screenshots, or guarantee secure deletion of bytes already held in Firestore's offline cache. This is accepted for the stated normal-personal-data threat model; state it in confirmation copy instead of promising remote erasure.
 - Changing Private to Shared publishes the current Shared View and starts a new prospective Share Grant. Earlier Private outcomes and prior-grant Cheers stay private. Confirmation says **Share this Task with [name] from now on** and lists the fields the Partner can see.
-- On unpairing, each Member keeps all of their own Tasks and history. Partner content disappears and Together returns to its neutral connect screen; Pair Invites and cross-account reads are revoked, and Cheers tied to the old Pair are no longer accessible in the app. Both people see **Together connection ended. Your Tasks and history are still yours.** Duit never names the initiator, and failed queued Cheers resolve as unavailable without blame.
+- On unpairing, each Member keeps all of their own Tasks and history. Partner content disappears and Together returns to its neutral connect screen; Pair Invites and cross-account reads are revoked, and Cheers tied to the old Pair are no longer accessible in the app. Either Member may later form a different Pair, which inherits none of the old Pair's access or Cheers. Both people see **Together connection ended. Your Tasks and history are still yours.** Duit never names the initiator, and failed queued Cheers resolve as unavailable without blame.
 
 ### Humane date behavior
 
@@ -107,7 +107,8 @@ Treat 48dp touch targets, TalkBack state/action labels, visible alternatives to 
 
 ### Separate concepts
 
-- **Pair** is a server-authorized relationship between exactly two Member UIDs, with an active or ended lifecycle.
+- **Member** is an administrator-approved individual with an independently owned private workspace; Google Authentication identifies the individual but does not grant membership by itself.
+- **Pair** is an optional server-authorized relationship between exactly two distinct approved Member UIDs, with an active or ended lifecycle. Many independent Pairs may coexist, while one Member may belong to at most one active Pair.
 - **Task** is the stable identity and lifecycle envelope with two variants: Standalone Task and Recurring Series.
 - **Owner** is the immutable Member UID controlling a Task. **Visibility** is either `Private` or `Shared(pairId, shareGeneration)` and controls Partner reads without changing ownership. Each new Share Grant increments the generation.
 - **Task Revision** and **Series Revision** are immutable, effective-dated snapshots of title, notes, subtask template, timing, recurrence, and miss policy. Reminder configuration is a separate Owner-only concern and is never embedded in Partner-readable Revisions.
@@ -140,6 +141,7 @@ Selected calendar dates are literal. A monthly rule for the 31st has no occurren
 ### Time semantics
 
 - Calendar commitments use `LocalDate`; reminder clock values use `LocalTime`.
+- Format a `LocalTime` with each device's current 12/24-hour system preference at display time. Observe configuration/time-format changes and re-render; never rewrite the stored value or reschedule merely because presentation changed.
 - Future schedules follow the phone's current local zone. Never encode a task date as UTC midnight.
 - Actual actions store `Instant` plus the observed zone and local date for faithful history.
 - A reminder in a DST gap fires at the first valid instant after the gap. In an overlap, use the earlier offset and post only once.
@@ -150,7 +152,9 @@ Selected calendar dates are literal. A monthly rule for the 31st has no occurren
 
 ### Core invariants
 
-- A Pair contains exactly two distinct allowlisted Member UIDs, and a Member belongs to at most one active Pair.
+- A server-controlled approval record is required for a UID to be a Member or access its private workspace. An authenticated but unapproved UID may read only its own approval record and may read or write no workspace, Task, Pair, or other Member data.
+- A Pair contains exactly two distinct approved Member UIDs, many independent Pairs may coexist, and a Member belongs to at most one active Pair.
+- Every Task starts `Private`; only its Owner may create `Shared(pairId, shareGeneration)` through an explicit sharing choice.
 - A Task has one immutable Owner. Only that Owner may mutate its Task tree; the Partner is read-only even when the Task is Shared.
 - Persisted `Private` requires `sharedWithPairId == null`. Persisted `Shared` requires a positive `shareGeneration` and a Pair ID whose immutable membership contains the Owner; Visibility and these fields change atomically. Partner access additionally requires that Pair to be the Owner's current active membership. An ended/stale binding is accepted for offline Owner writes but is effectively Private and normalized after synchronization.
 - A Share Grant grants Partner reads only while its exact Pair and generation are active. It never grants access to a later Pair or later re-share, and a Task that has never been Shared is never delivered to the Partner.
@@ -173,7 +177,7 @@ Selected calendar dates are literal. A monthly rule for the 31st has no occurren
 ### Technology choices
 
 - Kotlin, Jetpack Compose, Material 3, Coroutines, and Flow remain the right foundation.
-- Set `minSdk 28`, and compile/target the stable Android 16 / API 36 toolchain for the initial build. Run compatibility tests on an Android 17 / API 37 emulator, but do not make the production build depend on its preview SDK label and release-candidate AGP; move compile/target to 37 only after the SDK, AGP, and Firebase/Compose dependencies are all stable ([Android 17 SDK setup](https://developer.android.com/about/versions/17/setup-sdk)). Reconfirm both exact phone models before device QA.
+- Set `minSdk 28`, and compile/target the stable Android 16 / API 36 toolchain for the initial build. Run compatibility tests on an Android 17 / API 37 emulator, but do not make the production build depend on its preview SDK label and release-candidate AGP; move compile/target to 37 only after the SDK, AGP, and Firebase/Compose dependencies are all stable ([Android 17 SDK setup](https://developer.android.com/about/versions/17/setup-sdk)). Confirm the target phone models before device QA.
 - Use `com.gaylord.duit` as the default application ID and `Duit` as the app label; change the ID only before Firebase and release signing are configured.
 - Use Firebase Authentication with Google through Android Credential Manager, Cloud Firestore, Firebase App Check with Play Integrity, Firebase Cloud Messaging, DataStore for small device-local preferences, WorkManager, and AlarmManager.
 - Use a version catalog and Firebase BoM; pin stable dependency versions at implementation time rather than copying transient prerelease versions into this plan.
@@ -204,7 +208,7 @@ Use one logical store: Firestore. The cloud document set is the durable source o
 
 Do **not** add Room plus a custom outbox. Android's generic offline-first guidance recommends a local source of truth, but Firestore already supplies the local persisted cache, queued writes, snapshot listeners, and retry mechanism needed here. Duplicating it would require custom reconciliation for every schema change ([Android offline-first guidance](https://developer.android.com/topic/architecture/data-layer/offline-first), [Firestore cache configuration](https://firebase.google.com/docs/firestore/manage-data/enable-offline)).
 
-A fresh install must be online for Google sign-in and initial hydration. After hydration, creating, editing, completing, skipping, changing Visibility, and reviewing cached own history works offline. Pair creation, Pair Invite acceptance, and Unpairing require a connection because their exactly-two-member invariant is server-authoritative. Cheers may be queued offline and become visible or notify only after synchronization.
+A fresh install must be online for Google sign-in, administrator approval verification, and initial hydration. An unapproved identity receives no workspace data. After an approved Member hydrates, creating, editing, completing, skipping, changing Visibility, and reviewing cached own history works offline. Pair creation, Pair Invite acceptance, and Unpairing require a connection because their exactly-two-member and one-active-Pair-per-Member invariants are server-authoritative. Cheers may be queued offline and become visible or notify only after synchronization.
 
 On a replacement phone, a hydration coordinator performs server-sourced reads for the Member's complete owner tree before editing is enabled, so an empty cache cannot overwrite real data. Failure keeps that workspace locked with Retry and Sign out actions; only a completed server read may establish a genuinely empty workspace. Pair and Partner-shared hydration is a separate projection: its failure may show **Together is still updating**, but it must not block the Owner from using already-hydrated personal Tasks.
 
@@ -240,7 +244,7 @@ Keep ownership in the path and group each Task's authorization-sensitive childre
 /pairInvites/{inviteHash}
 /inviteRateLimits/{uid}
 /cheerDeliveries/{deliveryKey}
-/configuration/productionAccess
+/memberApprovals/{uid}
 ```
 
 - `workspace/main` contains schema version and last successful owner hydration metadata.
@@ -256,13 +260,13 @@ Keep ownership in the path and group each Task's authorization-sensitive childre
 - `dailyPlans` and `settings` are always Owner-only. Focus is never partner-visible.
 - `devices` contains FCM registration tokens and is readable only by trusted server code; one Member must never read the Partner's token.
 - `syncDiagnostics` contains device IDs, local edit versions, write errors, and branch-review metadata. The Partner never reads it.
-- `pairs/{pairId}` contains the two immutable Member UIDs and active/ended timestamps. Only callable Functions mutate Pair lifecycle.
+- `pairs/{pairId}` contains exactly two distinct immutable approved Member UIDs and active/ended timestamps. Only callable Functions mutate Pair lifecycle.
 - `pairMemberships/{uid}` is the server-owned, deterministic lock and active-Pair pointer for that UID. Pair acceptance transactionally creates both membership records; Unpair ends the Pair and clears both locks so concurrent invites cannot create overlapping Pairs.
 - A Cheer contains sender/recipient UID, Share Grant generation, optional Occurrence key and Completion Epoch, preset ID, client version, timestamps, and tombstone. It contains no Task title, note, or arbitrary text.
 - `pairInvites` stores a hash of an eight-character Crockford Base32 code, creator UID, expiry, and consumed state. Codes expire after 15 minutes, are single-use, and are rate-limited per UID by callable Functions. Clients never read or write invite documents directly.
 - `inviteRateLimits` persists server-only attempt/cooldown state and is updated transactionally; rate limiting never relies on Function instance memory.
 - `cheerDeliveries` is a server-only idempotency/cooldown ledger keyed by Cheer target and version. Client Cheer writes cannot modify delivery state or recursively retrigger delivery.
-- `configuration/productionAccess` is server-managed and contains the two permitted production UIDs. Auth may identify another Google account, but rules and Functions grant it no Duit data access.
+- `memberApprovals/{uid}` is a scalable, server-controlled per-UID registry maintained manually by an administrator. An authenticated identity may read only its own approval record, while rules and Functions require `approved == true` before granting any workspace or Pair access. Clients may neither list nor mutate approvals.
 
 Do not materialize an infinite canonical Occurrence collection. The Owner generates bounded agenda windows from canonical Revisions and merges Occurrence State and exceptions by deterministic key. A Partner first queries the other Owner's Task access envelopes using `visibility == SHARED` and `sharedWithPairId == activePairId`, reads each Task's current `shareGeneration`, then constrains that Task's Shared View and Cheer queries to the same generation. The small denormalized projection is deliberate: Firestore cannot redact fields from a readable document, and exposing canonical outcome/history documents would violate the product's anti-monitoring promise.
 
@@ -290,11 +294,11 @@ When either phone observes an ended Pair, enter a non-editable `RevokingPairData
 
 ## 6. Authentication and backend security
 
-Require one online Google sign-in before creating a workspace; there is no guest/local-only merge path. Use separate Firebase projects for development and production. Before release, record the two intended production Firebase Auth UIDs in a server-managed allowlist. App Check proves a request comes from an accepted app installation; it does not prove that an authenticated Google account is one of the couple, so both controls are required.
+Require one online Google sign-in and an administrator-created `memberApprovals/{uid}` record with `approved == true` before creating or hydrating a workspace; there is no guest/local-only merge path. Use separate Firebase projects for development and production, each with its own server-controlled approval registry. App Check proves a request comes from an accepted app installation; it does not prove that an authenticated Google identity is an approved Duit Member, so both controls are required.
 
-Firestore rules deny by default and first require an allowlisted authenticated UID. They then enforce these capabilities:
+Firestore rules deny by default and first require both an authenticated UID and its own Member Approval with `approved == true`. An unapproved identity may read only its own approval record so the app can explain its state; it may not read a prospective workspace, enumerate approvals, inspect Pair data, or write any Duit document. Rules then enforce these capabilities:
 
-- The path `ownerUid` may read and write their own Task and child documents, subject to strict field/type/size/schema validation. Owner writes remain valid offline even if Unpair happens concurrently: a stale Shared binding may refer to an active or ended Pair that contains the Owner, then is normalized to effective Private after synchronization. It never grants Partner reads unless the Pair is active.
+- An approved path `ownerUid` may read and write their own Task and child documents, subject to strict field/type/size/schema validation. Owner writes remain valid offline even if Unpair happens concurrently: a stale Shared binding may refer to an active or ended Pair that contains the Owner, then is normalized to effective Private after synchronization. It never grants Partner reads unless the Pair is active.
 - The other Member may read only the Shared Task access envelope, `sharedDefinitions`, `sharedExceptions`, `sharedCompletions`, `cheerTargets`, and current-generation Cheers when they are in the same active Pair, `visibility == SHARED`, `sharedWithPairId` equals that Pair, and projection `shareGeneration` matches the parent. Canonical Revisions, Occurrence States, exceptions, Pause Spans, reminders, and diagnostics are always denied.
 - The other Member may read only the active Partner's narrow `pairProfile`; every other user-level document remains Owner-only. A Member may read only their own membership lock. A Pair document is readable by its two immutable Members even after it ends so both phones can observe revocation, but only Functions may write Pair and membership documents.
 - A Partner may never write the Owner's canonical Task or Shared View documents. The next bullet's tightly constrained Cheer is the sole cross-owner write exception; Daily Plans, settings, reminders, device tokens, backup state, fork diagnostics, and restore state remain Owner-only.
@@ -303,13 +307,13 @@ Firestore rules deny by default and first require an allowlisted authenticated U
 
 Partner Task-list queries must include `visibility == SHARED` and `sharedWithPairId == activePairId`; each Shared View/Cheer query is scoped to one authorized parent Task and constrains `shareGeneration`. Firestore Security Rules evaluate a query's possible results and are not filters ([secure Firestore queries](https://firebase.google.com/docs/firestore/security/rules-query)). Test every Task child collection, query shape, direct document read, and collection-group attempt in the Emulator Suite.
 
-Use callable Cloud Functions with Auth and enforced App Check for Pair Invite creation/mutual confirmation and Unpair. These online functions transactionally contend on both deterministic `pairMemberships/{uid}` locks and reject self-pairing, expired or replayed codes, concurrent acceptance, a third Member, a Member already paired, and non-allowlisted UIDs. Either Member may Unpair; the function ends the Pair irreversibly, invalidates invites, and clears both locks before reporting success. This is the deliberate exception to the rule that ordinary Task commands must not depend on online transactions.
+Use callable Cloud Functions with Auth and enforced App Check for Pair Invite creation/mutual confirmation and Unpair. These online functions require active approval for both identities, transactionally contend on both deterministic `pairMemberships/{uid}` locks, and reject self-pairing, expired or replayed codes, concurrent acceptance, a third Member, a Member already paired, and unapproved UIDs. Either Member may Unpair; the function ends the Pair irreversibly, invalidates invites, and clears both locks before reporting success. Either may then form a new Pair, whose new Pair ID cannot satisfy an old Share Grant. This is the deliberate exception to the rule that ordinary Task commands must not depend on online transactions.
 
-Although Google Auth can identify any Google account, only the two allowlisted production UIDs receive data access. Also protect the backend from copied or modified APKs with Firebase App Check using Play Integrity. Register the release signing certificate, configure the provider for distribution outside Google Play (do not require Play-recognized or licensed verdicts), use the debug provider only in the dev project, monitor metrics on both sideloaded phones, and only then enable Firestore and Functions enforcement. Firebase documents this outside-Play configuration explicitly ([App Check for Android](https://firebase.google.com/docs/app-check/android/play-integrity-provider)).
+Although Google Auth can identify any Google account, only UIDs with active server-controlled Member Approval receive data access. Also protect the backend from copied or modified APKs with Firebase App Check using Play Integrity. Register the release signing certificate, configure the provider for distribution outside Google Play (do not require Play-recognized or licensed verdicts), use the debug provider only in the development project, monitor metrics on registered sideloaded test phones, and only then enable Firestore and Functions enforcement. Firebase documents this outside-Play configuration explicitly ([App Check for Android](https://firebase.google.com/docs/app-check/android/play-integrity-provider)).
 
-Production Cloud Functions deployment requires the pay-as-you-go Blaze plan even though two-person usage should remain inside no-cost quotas. Link billing deliberately, configure a low budget alert and usage monitoring, and understand that alerts do not cap charges ([Functions setup](https://firebase.google.com/docs/functions/get-started), [Firebase pricing plans](https://firebase.google.com/docs/projects/billing/firebase-pricing-plans)). Firebase API keys identify a project but do not authorize data, so allowlisting, rules, Auth, and App Check—not key secrecy—are the controls ([Firestore quotas](https://firebase.google.com/docs/firestore/quotas), [Firebase API keys](https://firebase.google.com/docs/projects/api-keys)).
+Production Cloud Functions deployment requires the pay-as-you-go Blaze plan even when early usage should remain inside no-cost quotas. Link billing deliberately, configure a low budget alert and usage monitoring, and understand that alerts do not cap charges ([Functions setup](https://firebase.google.com/docs/functions/get-started), [Firebase pricing plans](https://firebase.google.com/docs/projects/billing/firebase-pricing-plans)). Firebase API keys identify a project but do not authorize data, so Member Approval, rules, Auth, and App Check—not key secrecy—are the controls ([Firestore quotas](https://firebase.google.com/docs/firestore/quotas), [Firebase API keys](https://firebase.google.com/docs/projects/api-keys)).
 
-Security Rules document-access calls are limited per operation and per atomic batch. Keep ordinary cross-document batches scoped to one Task, begin restore/import batches at no more than ten writes, and increase that cap only after the final Ruleset proves its access-call budget in the Emulator. A nominal 500-write Firestore batch is not a safe design target when each write may consult allowlist, parent Task, Pair, or target documents ([Rules access-call limits](https://firebase.google.com/docs/firestore/security/rules-conditions#access_call_limits)).
+Security Rules document-access calls are limited per operation and per atomic batch. Keep ordinary cross-document batches scoped to one Task, begin restore/import batches at no more than ten writes, and increase that cap only after the final Ruleset proves its access-call budget in the Emulator. A nominal 500-write Firestore batch is not a safe design target when each write may consult Member Approval, parent Task, Pair, or target documents ([Rules access-call limits](https://firebase.google.com/docs/firestore/security/rules-conditions#access_call_limits)).
 
 ## 7. Reminder architecture
 
@@ -369,18 +373,18 @@ Every schema document and backup has an explicit version. Mappers tolerate addit
 
 - Repository contract tests against fakes and the Firestore Emulator.
 - Offline create/edit/complete/reopen/skip/remove, process death, reconnect, replay, duplicate commands, same-document LWW, and concurrent revision fork detection.
-- Rules tests proving Owner CRUD; Partner access only to current-generation Shared View/Cheers; denial of canonical outcomes, reminders, diagnostics, Private/old-generation Tasks, and Task writes; outsider/unauthenticated denial; allowlist enforcement; required query constraints; maximum rule-access-cost batches; and rejection of forged-path, malformed, oversized, and immutable-field writes.
+- Rules tests proving approved Owner CRUD; Partner access only to explicitly shared current-generation Shared View/Cheers; denial of canonical outcomes, reminders, diagnostics, Private/old-generation Tasks, and Task writes; cross-Pair, outsider, unauthenticated, and unapproved denial; approval-record self-read but no listing or client writes; required query constraints; maximum rule-access-cost batches; and rejection of forged-path, malformed, oversized, and immutable-field writes.
 - Projection contract tests prove reminders, exact instants/zones, Subtask checked state, Missed/Skip/Not Doing, corrections, and diagnostics can never enter Shared View documents; Private Tasks contribute no placeholder, count, discrepancy, or activity hint.
-- Function tests cover self-invite, two-sided identity confirmation, expired/replayed code, simultaneous acceptance against membership locks, persisted rate limits, third-member attempts, already-paired Members, unauthorized UIDs, Unpair races, duplicate/out-of-order Cheer triggers, replacement/tombstone cooldown suppression, invalid presets/epochs/grants, and stale FCM tokens.
+- Function tests cover approved and unapproved identities, self-invite, two-sided identity confirmation, expired/replayed code, simultaneous acceptance against membership locks, persisted rate limits, third-member attempts, already-paired Members, simultaneous independent Pairs, cross-Pair isolation, Unpair followed by a new Pair, Unpair races, duplicate/out-of-order Cheer triggers, replacement/tombstone cooldown suppression, invalid presets/epochs/grants, and stale FCM tokens.
 - Offline privacy tests cover queued Shared-to-Private changes, an offline Partner's disclosed stale-cache window, convergence after reconnect, a queued Cheer racing privacy revocation or Unpair, and no inheritance by a later Pair.
 - Account switching and Unpairing clear cached Partner projections; neither person ever sees another account's Private snapshot.
 - Manual export/import covers round trip, corruption, unsupported version, interrupted restore, duplicate replay, non-empty-workspace rejection, exclusion of Partner/Pair/Cheer data, and coercion of stale Shared bindings to Private.
 
 ### UI, accessibility, and device tests
 
-- Compose state/render tests for Today section order, maximum-three Focus invariant, editor scope prompts, Needs a decision actions, direct history correction, capped Together sections, read-only/redacted Partner details, audience control visible before fast-add submission at 200% text, two-sided Pairing review, Cheer eligibility/Undo/dismiss/Allow Cheers/mute, exact neutral Unpair copy, and generic offline freshness copy.
+- Compose state/render tests for Today section order, maximum-three Focus invariant, editor scope prompts, Needs a decision actions, direct history correction, capped Together sections, read-only/redacted Partner details, fast add defaulting to Only me with the audience control visible before submission at 200% text, two-sided Pairing review, Cheer eligibility/Undo/dismiss/Allow Cheers/mute, exact neutral Unpair copy, device-derived 12/24-hour display changes, and generic offline freshness copy.
 - TalkBack semantics/order, 48dp targets, 200% font scale, light/dark contrast, reduced motion, one-handed layouts, and visible alternatives to gestures.
-- Exact permission granted/denied/revoked, notification permission denied, offline Done/Later actions, stale alarm suppression, reboot, zone/time change, process death, and APK replacement.
+- Exact permission granted/denied/revoked, notification permission denied, offline Done/Later actions, stale alarm suppression, reboot, zone/time change, 12/24-hour preference changes without reminder drift, process death, and APK replacement.
 - FCM token rotation, recipient-UID mismatch suppression, duplicate/cooldown Cheer delivery, no push on replacement/tombstone, notification denial, generic lock-screen content, deep-link reauthorization after privacy revocation, and in-app Cheer discovery when push is lost.
 - Physical OnePlus drills under battery optimization and Doze.
 - Clean-device recovery drill: sign in, hydrate once, show no duplicates, preserve historical snapshots, and rebuild alarms.
@@ -391,31 +395,31 @@ Every schema document and backup has an explicit version. Mappers tolerate addit
 
 Build a single polished path that proves ownership, privacy, offline behavior, recovery, reminders, and encouragement before broadening features:
 
-1. Create the one-module Compose shell, Duit theme primitives, manual dependency container, dev/prod Firebase configuration, Google sign-in, two-UID production allowlist, Security Rules, and App Check monitor mode.
-2. Implement Pair Invite create/mutual confirmation, deterministic membership locks, persisted rate limits, Pair hydration, and Unpair in the Emulator. Form one Pair between two test accounts and prove a concurrent or third account is denied.
+1. Create the one-module Compose shell, Duit theme primitives, manual dependency container, development Firebase configuration, Google sign-in, the server-controlled per-UID Member Approval registry, Security Rules, and App Check debug/monitor mode. Production setup may follow after the development slice is proven.
+2. Implement Pair Invite create/mutual confirmation, deterministic membership locks, persisted rate limits, Pair hydration, and Unpair in the Emulator. Form two independent Pairs among four approved test accounts; prove cross-Pair access is denied, and reject a concurrent or third Member and an unapproved account.
 3. Implement only Daily recurrence, the stable Task/Revision/Occurrence/Completion Epoch model, owner-scoped canonical Firestore repository, current-generation Shared View projection, persistent cache, Today, and minimal Together.
-4. Let one Member create a Daily Task with title, one optional Subtask, one optional reminder, and the visible default **Visible to [Partner]** audience. Show it immediately while offline and show it read-only on the Partner's Together after synchronization.
-5. Toggle an equivalent Task to **Only me** and prove it cannot be read directly, queried, deep-linked, exported by, cached onto a newly hydrated Partner installation, or inferred through a placeholder/count.
+4. Let one Member create a default-Private Daily Task with title, one optional Subtask, and one optional reminder. Explicitly choose **Share with [Partner]**, show it immediately while offline, and show it read-only on the Partner's Together after synchronization.
+5. Leave an equivalent Task **Only me** and prove it cannot be read directly, queried, deep-linked, exported by, cached onto a newly hydrated Partner installation, or inferred through a placeholder/count.
 6. Complete the Shared Occurrence offline, allow immediate Undo and later direct correction, preserve its canonical definition/Subtask snapshot, and synchronize only a date-level completion into Recent moments. Let the Partner send one eligible preset Cheer offline; deliver it in-app and once through a generic, idempotent FCM notification while proving replacement/tombstone writes do not push again.
 7. Schedule and fire the Owner's reminder with Done/Later, including exact-to-inexact fallback and stale-alarm suppression. Never schedule that reminder on the Partner's phone.
 8. Reconnect both phones and show honest backup plus generic Together freshness state; then hydrate the Owner on a clean device, rebuild the reminder, and Unpair online through the non-editable cache-revocation state without losing either Member's owned data or leaving cross-account access.
 
-The slice is done only when two-account Rules tests plus airplane-mode, process-death, reboot, FCM-loss, privacy-revocation, Unpair, and clean-install restore drills pass. Do not postpone privacy, recovery, or reminder behavior to a later architecture phase; they are the architectural proof.
+The slice is done only when approved/unapproved and multi-Pair Rules tests plus airplane-mode, process-death, reboot, FCM-loss, privacy-revocation, Unpair/re-pair, and clean-install restore drills pass. Do not postpone privacy, recovery, or reminder behavior to a later architecture phase; they are the architectural proof.
 
 After that slice, add the remaining recurrence variants and exceptions; standalone/flexible/Anytime Tasks; notes and full Subtasks; full Together/Focus/Plan/Tasks surfaces; pause/history/export; then illustration, motion, accessibility, and physical-device hardening.
 
 ## 11. Five biggest ways this project could fail
 
-1. **Privacy is enforced in UI but leaks through Firestore.** A missing child rule, unconstrained query, stale Pair binding, or deep link exposes a Private Task. Mitigate with Owner-path authority, Pair-scoped grants, deny-by-default Rules, a two-UID allowlist, and Emulator tests for every path and query.
+1. **Privacy is enforced in UI but leaks through Firestore.** A missing child rule, unconstrained query, stale Pair binding, or deep link exposes a Private Task. Mitigate with Owner-path authority, explicit Pair-scoped grants, deny-by-default Rules, per-UID Member Approval, and Emulator tests for every path and query.
 2. **Calendar trust collapses.** A DST, missing-date, exception, zone-sharing, or series-edit bug creates duplicate or misleading work. Mitigate with a pure recurrence engine, immutable Revisions, deterministic Occurrence IDs, Owner-zone semantics, and property tests before UI breadth.
 3. **Recovery is promised but never rehearsed.** Firestore appears synced while a clean phone restores incomplete/duplicated owner data or accidentally imports Partner data. Mitigate with visible backup state, separate owner/Partner hydration, release-blocking clean-device drills, and owner-only export round trips.
 4. **Android background delivery feels unreliable.** OxygenOS suppresses local reminders, or Functions/FCM duplicate, delay, or lose Cheers. Mitigate by treating Firestore as Cheer truth, making triggers idempotent, reconciling alarms after every system event, and testing both real phones under Doze and notification denial.
-5. **Together becomes surveillance or a second social app.** Overdue exposure, nudges, metrics, chat, or automatic activity alerts turn encouragement into pressure. Mitigate with read-only sharing, Private-by-choice controls, a separate personal Today, preset one-shot Cheers, no negative activity alerts, and hard v1 scope boundaries.
+5. **Together becomes surveillance or a second social app.** Overdue exposure, nudges, metrics, chat, or automatic activity alerts turn encouragement into pressure. Mitigate with read-only sharing, Private-by-default Tasks, explicit Share Grants, a separate personal Today, preset one-shot Cheers, no negative activity alerts, and hard v1 scope boundaries.
 
 ## 12. Architecture readiness checklist
 
-- [ ] Confirm both primary phone models, Android versions, and system 12/24-hour settings before device QA; the known target is a recent OnePlus Nord.
-- [ ] Confirm `com.gaylord.duit` as the application ID, create separate dev/prod Firebase projects, and record the two intended production Auth UIDs for the allowlist.
+- [ ] Confirm target phone models and Android versions before device QA; test 12-hour, 24-hour, and live preference changes on each relevant device rather than recording one fixed format.
+- [ ] Confirm `com.gaylord.duit` as the application ID, complete the development Firebase setup, and create `memberApprovals/{uid}` records with `approved == true` for the development testers. Production setup and approvals may follow after the development slice is proven.
 - [ ] Create and securely duplicate the release signing keystore before registering Firebase SHA fingerprints.
 - [ ] Configure Google sign-in, Firestore indexes/rules, Functions, FCM, App Check outside-Play settings, the required Blaze billing account, budget alerts that are understood not to cap spend, quota monitoring, and Emulator Suite tests.
 - [ ] Approve the glossary in `CONTEXT.md`, especially Pair, Owner, Visibility, Share Grant, Shared View, Completion Epoch, Cheer, Occurrence, Skip versus Remove, Planned Date versus Deadline, and Miss Policy.
@@ -424,7 +428,7 @@ After that slice, add the remaining recurrence variants and exceptions; standalo
 - [ ] Approve Today/Together/Plan/Tasks wireframes, the always-visible audience control, Allow Cheers/dismiss controls, two-sided Pairing confirmation, exact privacy/Unpair/freshness copy, warm botanical tokens, notification permission copy, and all Needs a decision actions.
 - [ ] Explicitly accept the offline privacy limit: revocation blocks server reads after sync but cannot erase previously viewed content or a disconnected cache immediately.
 - [ ] Define the sync-state truth table and sign-out behavior for pending writes.
-- [ ] Script the two-account pairing, airplane-mode, privacy transition, Unpair, FCM-loss/duplication, reboot, timezone, exact-permission, process-death, APK-update, and clean-install recovery drills.
+- [ ] Script approved/unapproved identity, four-account/two-Pair isolation, pairing, airplane-mode, privacy transition, Unpair/re-pair, FCM-loss/duplication, reboot, timezone, 12/24-hour preference, exact-permission, process-death, APK-update, and clean-install recovery drills.
 - [ ] Make recurrence, cross-account Security Rules, Functions, backup/restore, accessibility, and physical-device reminder/FCM tests release gates—not post-MVP polish.
 
 Once those items are settled, an implementer should not need to invent product semantics or architectural policy while coding.

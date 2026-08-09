@@ -20,9 +20,40 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.fail
 import org.junit.Test
 
 class DuitWorkspaceTest {
+    @Test
+    fun `Task title rejects blanks and normalizes harmless surrounding whitespace`() =
+        runTest {
+            val workspace = createWorkspace()
+
+            try {
+                workspace.execute(
+                    MemberCommand.AddPrivateTaskToToday(
+                        commandIdentifier = CommandIdentifier("blank-title"),
+                        title = "   ",
+                    ),
+                )
+                fail("Expected a blank Task title to be rejected")
+            } catch (_: IllegalArgumentException) {
+                Unit
+            }
+
+            workspace.execute(
+                MemberCommand.AddPrivateTaskToToday(
+                    commandIdentifier = CommandIdentifier("trimmed-title"),
+                    title = "  Water the herbs  ",
+                ),
+            )
+
+            assertEquals(
+                listOf("Water the herbs"),
+                workspace.observePersonalAgenda().first().tasks.map(AgendaTask::title),
+            )
+        }
+
     @Test
     fun `member can add a private Task to Today and see it after reconstruction`() = runTest {
         val persistence = InMemoryTaskRepository()

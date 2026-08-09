@@ -1,16 +1,20 @@
 # Duit Task Planning
 
-Duit helps two people manage their own days, see what the other chooses to share, and encourage each other without punishment, monitoring, or engagement pressure.
+Duit helps individuals manage their own days and, when they choose a Partner, share selectively and encourage each other without punishment, monitoring, or engagement pressure.
 
 ## People and privacy
 
 **Pair**:
-The private relationship between exactly two authenticated Member accounts. A Member may belong to at most one active Pair.
+An optional private relationship between exactly two distinct approved Members. Many independent Pairs may coexist in Duit, while a Member may belong to at most one active Pair.
 _Avoid_: Team, workspace, household
 
 **Member**:
-One authenticated, allowlisted Duit account. A Member keeps an independently owned task collection, normally uses one primary phone, and may be unpaired or belong to one active Pair.
+An administrator-approved individual with an independently owned private Duit workspace. A Member normally uses one primary phone and may be unpaired or belong to one active Pair.
 _Avoid_: Collaborator, teammate
+
+**Member Approval**:
+The administrator's authorization for an authenticated identity to become a Member.
+_Avoid_: Pair allowlist, signup
 
 **Partner**:
 The other Member in the current Pair, described from one Member's point of view.
@@ -25,7 +29,7 @@ The Task-level choice between Shared and Private. Its current value governs whet
 _Avoid_: Permission level
 
 **Shared**:
-Visibility that lets the Partner read a Task's Shared View while the Pair and Share Grant are active. New Tasks default to Shared after pairing, but sharing never grants control.
+Visibility that lets the Partner read a Task's Shared View while the Pair and Share Grant are active. Only the Owner may choose it, and sharing never grants control.
 _Avoid_: Collaborative, public
 
 **Share Grant**:
@@ -37,11 +41,11 @@ The privacy-limited form of a Shared Task: its title, note, Subtask labels, sche
 _Avoid_: Public copy, activity log
 
 **Private**:
-Visibility that restricts a Task and its history to its Owner. Tasks created before pairing remain Private until the Owner deliberately shares them.
+Visibility that restricts a Task and its history to its Owner. Every new Task starts Private, including while the Owner is paired.
 _Avoid_: Hidden
 
 **Pair Invite**:
-A short-lived, one-use invitation that lets the intended second Member form a Pair while both people are online.
+A short-lived, one-use invitation that lets another approved Member form a Pair while both people are online.
 _Avoid_: Team invite, friend request
 
 **Cheer**:

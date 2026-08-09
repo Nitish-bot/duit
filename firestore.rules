@@ -2,6 +2,30 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasActiveMemberApproval(uid) {
+      let approval = /databases/$(database)/documents/memberApprovals/$(uid);
+      return exists(approval) ? get(approval).data.approved == true : false;
+    }
+
+    function ownsApprovedWorkspace(ownerUid) {
+      return signedIn()
+        && request.auth.uid == ownerUid
+        && hasActiveMemberApproval(ownerUid);
+    }
+
+    match /memberApprovals/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+
+    match /users/{ownerUid}/{document=**} {
+      allow read, write: if ownsApprovedWorkspace(ownerUid);
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

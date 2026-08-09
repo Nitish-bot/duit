@@ -17,48 +17,112 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
-class DuitWorkspace(
-    private val memberIdentifier: MemberIdentifier,
+@OptIn(ExperimentalCoroutinesApi::class)
+class DuitWorkspace private constructor(
     private val clock: Clock,
     private val zoneProvider: ZoneProvider,
     private val taskIdentities: TaskIdentityGenerator,
-    private val persistence: TaskRepository,
-    private val reminders: ReminderGateway,
+    private val persistence: TaskRepository?,
+    private val reminders: ReminderGateway?,
+    private val accessController: WorkspaceAccessController,
 ) {
-    fun observePersonalAgenda(): Flow<PersonalAgenda> {
-        val date = currentMemberMoment().localDate
+    constructor(
+        memberIdentifier: MemberIdentifier,
+        clock: Clock,
+        zoneProvider: ZoneProvider,
+        taskIdentities: TaskIdentityGenerator,
+        persistence: TaskRepository,
+        reminders: ReminderGateway,
+    ) : this(
+        clock = clock,
+        zoneProvider = zoneProvider,
+        taskIdentities = taskIdentities,
+        persistence = persistence,
+        reminders = reminders,
+        accessController = ReadyWorkspaceAccessController(memberIdentifier),
+    )
 
-        return persistence
-            .observeStandaloneTasks(
-                ownerIdentifier = memberIdentifier,
-                plannedDate = date,
-            ).map { creations ->
-                PersonalAgenda(
-                    date = date,
-                    tasks = creations.map(StandaloneTaskCreation::toAgendaTask),
-                )
-            }
+    val accessState: StateFlow<WorkspaceAccessState> = accessController.state
+
+    suspend fun restoreSession() {
+        accessController.restoreSession()
     }
 
-    fun observeTaskDetail(taskIdentifier: TaskIdentifier): Flow<TaskDetail?> =
-        persistence
-            .observeStandaloneTask(
-                ownerIdentifier = memberIdentifier,
-                taskIdentifier = taskIdentifier,
-            ).map { creation -> creation?.toTaskDetail() }
+    suspend fun retryAccess() {
+        accessController.retryAccess()
+    }
 
-    suspend fun execute(command: MemberCommand): TaskIdentifier =
-        when (command) {
-            is MemberCommand.AddPrivateTaskToToday -> addPrivateTaskToToday(command)
+    suspend fun signOut() {
+        accessController.signOut()
+    }
+
+    fun observePersonalAgenda(): Flow<PersonalAgenda> =
+        accessState.flatMapLatest { state ->
+            val date = currentMemberMoment().localDate
+            val memberIdentifier = (state as? WorkspaceAccessState.Ready)?.memberIdentifier
+
+            if (memberIdentifier == null) {
+                return@flatMapLatest flowOf(PersonalAgenda(date = date, tasks = emptyList()))
+            }
+
+            requireTaskPersistence()
+                .observeStandaloneTasks(
+                    ownerIdentifier = memberIdentifier,
+                    plannedDate = date,
+                ).map { creations ->
+                    PersonalAgenda(
+                        date = date,
+                        tasks = creations.map(StandaloneTaskCreation::toAgendaTask),
+                    )
+                }
         }
 
+    fun observeTaskDetail(taskIdentifier: TaskIdentifier): Flow<TaskDetail?> =
+        accessState.flatMapLatest { state ->
+            val memberIdentifier = (state as? WorkspaceAccessState.Ready)?.memberIdentifier
+                ?: return@flatMapLatest flowOf(null)
+
+            requireTaskPersistence()
+                .observeStandaloneTask(
+                    ownerIdentifier = memberIdentifier,
+                    taskIdentifier = taskIdentifier,
+                ).map { creation -> creation?.toTaskDetail() }
+        }
+
+    suspend fun execute(command: MemberCommand): TaskIdentifier {
+        val memberIdentifier = requireReadyMemberIdentifier()
+
+        return when (command) {
+            is MemberCommand.AddPrivateTaskToToday ->
+                addPrivateTaskToToday(
+                    memberIdentifier = memberIdentifier,
+                    command = command,
+                )
+        }
+    }
+
     private suspend fun addPrivateTaskToToday(
+        memberIdentifier: MemberIdentifier,
         command: MemberCommand.AddPrivateTaskToToday,
     ): TaskIdentifier {
+        val title = command.title.trim()
+        require(title.isNotBlank()) { "Task title must not be blank" }
         val moment = currentMemberMoment()
+        val persistence = requireTaskPersistence()
+        val reminderGateway =
+            command.reminderAt?.let {
+                reminders
+                    ?: throw WorkspaceCapabilityUnavailableException(
+                        WorkspaceCapability.ReminderScheduling,
+                    )
+            }
         val identifiers = taskIdentities.identifiersFor(command.commandIdentifier)
         val creation =
             StandaloneTaskCreation(
@@ -74,7 +138,7 @@ class DuitWorkspace(
                     TaskRevision(
                         identifier = identifiers.revisionIdentifier,
                         taskIdentifier = identifiers.taskIdentifier,
-                        title = command.title,
+                        title = title,
                         plannedDate = moment.localDate,
                         effectiveDate = moment.localDate,
                         recordedAt = moment,
@@ -91,10 +155,22 @@ class DuitWorkspace(
             )
         val durableCreation = persistence.putStandaloneTaskIfAbsent(creation)
 
-        durableCreation.reminder?.let { reminders.reconcile(it.toScheduledReminder()) }
+        durableCreation.reminder?.let { reminderGateway?.reconcile(it.toScheduledReminder()) }
 
         return durableCreation.task.identifier
     }
+
+    private fun requireReadyMemberIdentifier(): MemberIdentifier {
+        val state = accessState.value
+        return (state as? WorkspaceAccessState.Ready)?.memberIdentifier
+            ?: throw WorkspaceLockedException(state)
+    }
+
+    private fun requireTaskPersistence(): TaskRepository =
+        persistence
+            ?: throw WorkspaceCapabilityUnavailableException(
+                WorkspaceCapability.TaskPersistence,
+            )
 
     private fun currentMemberMoment(): MemberActionMoment {
         val instant = clock.instant()
@@ -106,7 +182,46 @@ class DuitWorkspace(
             zoneId = zoneId,
         )
     }
+
+    companion object {
+        internal fun authenticated(
+            clock: Clock,
+            zoneProvider: ZoneProvider,
+            taskIdentities: TaskIdentityGenerator,
+            persistence: TaskRepository?,
+            reminders: ReminderGateway?,
+            authentication: AuthenticationGateway,
+            approval: MemberApprovalGateway,
+            hydration: OwnerWorkspaceHydrationGateway,
+            persistedSession: PersistedWorkspaceSessionGateway,
+            sessionOperations: WorkspaceSessionOperationCoordinator,
+        ): DuitWorkspace =
+            DuitWorkspace(
+                clock = clock,
+                zoneProvider = zoneProvider,
+                taskIdentities = taskIdentities,
+                persistence = persistence,
+                reminders = reminders,
+                accessController =
+                    AuthenticatedWorkspaceAccessController(
+                        authentication = authentication,
+                        approval = approval,
+                        hydration = hydration,
+                        persistedSession = persistedSession,
+                        sessionOperations = sessionOperations,
+                    ),
+            )
+    }
 }
+
+enum class WorkspaceCapability {
+    TaskPersistence,
+    ReminderScheduling,
+}
+
+class WorkspaceCapabilityUnavailableException(
+    val capability: WorkspaceCapability,
+) : IllegalStateException("Workspace capability is unavailable: $capability")
 
 @JvmInline
 value class CommandIdentifier(val value: String)

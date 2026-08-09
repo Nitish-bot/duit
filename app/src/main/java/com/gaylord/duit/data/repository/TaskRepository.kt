@@ -7,7 +7,10 @@ import java.time.LocalDate
 import kotlinx.coroutines.flow.Flow
 
 interface TaskRepository {
-    /** Creates by stable Task identity, returning the already-durable creation on command replay. */
+    /**
+     * Atomically accepts a creation into the local durable store by stable Task identity.
+     * Command replay returns the creation already present there.
+     */
     suspend fun putStandaloneTaskIfAbsent(
         creation: StandaloneTaskCreation,
     ): StandaloneTaskCreation
