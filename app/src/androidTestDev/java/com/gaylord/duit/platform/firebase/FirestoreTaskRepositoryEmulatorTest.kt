@@ -35,6 +35,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,6 +44,14 @@ import org.junit.runner.RunWith
 class FirestoreTaskRepositoryEmulatorTest {
     private val repository: TaskRepository =
         FirestoreTaskRepository(firestoreProvider = { firestore })
+
+    @Before
+    fun requireRepositoryEmulatorOptIn() {
+        assumeTrue(
+            "Run this conformance class through npm run test:android-repository",
+            repositoryEmulatorIsEnabled(),
+        )
+    }
 
     @Test
     fun offlineCreationSurvivesRepositoryReconstructionAndReplaysAtTheOwnerPaths() = runBlocking {
@@ -242,11 +251,7 @@ class FirestoreTaskRepositoryEmulatorTest {
         @JvmStatic
         @BeforeClass
         fun connectToFirestoreEmulator() {
-            assumeTrue(
-                "Run this conformance class through npm run test:android-repository",
-                InstrumentationRegistry.getArguments()
-                    .getString(RunRepositoryEmulatorArgument) == "true",
-            )
+            if (!repositoryEmulatorIsEnabled()) return
             val context = ApplicationProvider.getApplicationContext<Context>()
             val options =
                 FirebaseOptions.Builder()
@@ -271,6 +276,10 @@ class FirestoreTaskRepositoryEmulatorTest {
             firestore.clearPersistence().await()
             firebaseApp.delete()
         }
+
+        private fun repositoryEmulatorIsEnabled(): Boolean =
+            InstrumentationRegistry.getArguments()
+                .getString(RunRepositoryEmulatorArgument) == "true"
     }
 }
 

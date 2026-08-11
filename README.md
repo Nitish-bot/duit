@@ -19,6 +19,13 @@ Duit is an Android app for individuals to manage their own days and optionally P
   ```
 
   Make the SDK available through `ANDROID_HOME` or Android Studio's generated `local.properties`.
+  If Homebrew installed the command-line tools under `/opt/homebrew/share/android-commandlinetools`,
+  make `adb` available in the current terminal with:
+
+  ```sh
+  export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+  export PATH="$ANDROID_HOME/platform-tools:$PATH"
+  ```
 - Node.js 22 and npm. The repository pins Node in `.nvmrc`, and the Functions package declares the same runtime.
 
 ## Clean checkout
@@ -55,6 +62,8 @@ With a device or Android Emulator connected, run the Compose UI tests for primar
 ```sh
 ./gradlew :app:connectedDevDebugAndroidTest
 ```
+
+On a physical phone, unlock it first and enable **Keep screen on while charging** for the test run. The Compose host Activity must remain resumed while instrumentation is running.
 
 Build the installable development APK:
 

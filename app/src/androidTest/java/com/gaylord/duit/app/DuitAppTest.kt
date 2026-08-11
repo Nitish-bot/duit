@@ -2,11 +2,14 @@ package com.gaylord.duit.app
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
-import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
@@ -19,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.model.TaskIdentifier
@@ -146,7 +150,7 @@ class DuitAppTest {
             .performClick()
 
         assertEquals(listOf("Water the herbs"), addedTitles)
-        composeRule.onNodeWithTag(TodayTaskTitleInputTag).assertTextEquals("")
+        composeRule.onNodeWithTag(TodayTaskTitleInputTag).assertEditableTextEquals("")
     }
 
     @Test
@@ -168,7 +172,7 @@ class DuitAppTest {
 
         composeRule.onNodeWithTag(TodayTaskTitleInputTag)
             .assertIsNotEnabled()
-            .assertTextEquals("Water the herbs")
+            .assertEditableTextEquals("Water the herbs")
         composeRule.onNodeWithText("Add Task").assertIsEnabled()
             .performClick()
         assertEquals(2, commandIdentifiers.size)
@@ -195,7 +199,7 @@ class DuitAppTest {
         composeRule.runOnIdle { requireNotNull(completeAdd)(false) }
         composeRule.onNodeWithTag(TodayTaskTitleInputTag)
             .assertIsNotEnabled()
-            .assertTextEquals("Water the herbs")
+            .assertEditableTextEquals("Water the herbs")
         composeRule.onNodeWithText("Add Task").assertIsEnabled()
     }
 
@@ -220,7 +224,7 @@ class DuitAppTest {
 
         composeRule.onNodeWithTag(TodayTaskTitleInputTag)
             .assertIsNotEnabled()
-            .assertTextEquals("Water the herbs")
+            .assertEditableTextEquals("Water the herbs")
         composeRule.onNodeWithText("Add Task").assertIsEnabled().performClick()
         assertEquals(2, commandIdentifiers.size)
         assertEquals(commandIdentifiers.first(), commandIdentifiers.last())
@@ -464,3 +468,11 @@ class DuitAppTest {
                 ),
         )
 }
+
+private fun SemanticsNodeInteraction.assertEditableTextEquals(value: String) =
+    assert(
+        SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText,
+            AnnotatedString(value),
+        ),
+    )
