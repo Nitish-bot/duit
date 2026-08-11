@@ -1,7 +1,13 @@
 import { createHash, randomInt } from "node:crypto";
 
 import { getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import {
+  type DocumentData,
+  type DocumentReference,
+  getFirestore,
+  Timestamp,
+  type Transaction,
+} from "firebase-admin/firestore";
 import {
   type CallableRequest,
   type FunctionsErrorCode,
@@ -22,14 +28,14 @@ interface PairingCallablePolicy {
   enforceAppCheck: boolean;
 }
 
-interface MemberIdentity {
+interface GoogleDisplayIdentity {
   displayName: string;
   photoUrl: string | null;
 }
 
-interface AuthenticatedMember {
+interface AuthenticatedGoogleIdentity {
   uid: string;
-  identity: MemberIdentity;
+  displayIdentity: GoogleDisplayIdentity;
 }
 
 interface CreatePairInviteResult {
@@ -39,13 +45,13 @@ interface CreatePairInviteResult {
 
 interface PairingStatusResult {
   pairId: string;
-  partnerIdentity: MemberIdentity;
+  partnerIdentity: GoogleDisplayIdentity;
   state: "ACTIVE" | "PENDING_CONFIRMATION";
 }
 
 type InviteLookup =
   | {
-      creatorIdentity: MemberIdentity;
+      creatorIdentity: GoogleDisplayIdentity;
       creatorUid: string;
       kind: "OPEN";
     }
@@ -61,6 +67,15 @@ type GetPairingStatusResult =
       partnerConfirmed: boolean;
       selfConfirmed: boolean;
     });
+
+interface PendingPairExpiry {
+  memberMembershipReference: DocumentReference;
+  now: Timestamp;
+  pairId: string;
+  pairReference: DocumentReference;
+  partnerMembershipData: DocumentData | undefined;
+  partnerMembershipReference: DocumentReference;
+}
 
 export function createPairingCallables(policy: PairingCallablePolicy) {
   const callableOptions = {
@@ -82,13 +97,17 @@ async function confirmPair(
   PairingStatusResult & { partnerConfirmed: boolean; selfConfirmed: boolean }
 > {
   const pairId = requirePairIdData(request.data);
-  const member = requireAuthenticatedMember(request);
+  const authenticatedIdentity = requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const now = Timestamp.now();
 
   const outcome = await database.runTransaction(async (transaction) => {
-    const approvalReference = database.doc(`memberApprovals/${member.uid}`);
-    const membershipReference = database.doc(`pairMemberships/${member.uid}`);
+    const approvalReference = database.doc(
+      `memberApprovals/${authenticatedIdentity.uid}`,
+    );
+    const membershipReference = database.doc(
+      `pairMemberships/${authenticatedIdentity.uid}`,
+    );
     const [approval, membership] = await transaction.getAll(
       approvalReference,
       membershipReference,
@@ -107,9 +126,11 @@ async function confirmPair(
     ) {
       throw new HttpsError("failed-precondition", "The Pair cannot be confirmed.");
     }
-    const selfIndex = members.findIndex((candidate) => candidate.uid === member.uid);
+    const selfIndex = members.findIndex(
+      (candidate) => candidate.uid === authenticatedIdentity.uid,
+    );
     const partnerIndex = members.findIndex(
-      (candidate) => candidate.uid !== member.uid,
+      (candidate) => candidate.uid !== authenticatedIdentity.uid,
     );
     if (selfIndex < 0 || partnerIndex < 0) {
       throw new HttpsError("permission-denied", "The Member is not in this Pair.");
@@ -135,15 +156,14 @@ async function confirmPair(
         confirmationExpiresAt === null ||
         confirmationExpiresAt.toMillis() <= now.toMillis()
       ) {
-        transaction.update(pairReference, {
-          expiredAt: now,
-          state: "EXPIRED",
-          updatedAt: now,
+        expirePendingPair(transaction, {
+          memberMembershipReference: membershipReference,
+          now,
+          pairId,
+          pairReference,
+          partnerMembershipData: partnerMembership.data(),
+          partnerMembershipReference,
         });
-        transaction.delete(membershipReference);
-        if (membershipBelongsToPair(partnerMembership.data(), pairId)) {
-          transaction.delete(partnerMembershipReference);
-        }
         return { kind: "EXPIRED" as const };
       }
     }
@@ -193,12 +213,16 @@ async function getPairingStatus(
   request: CallableRequest<unknown>,
 ): Promise<GetPairingStatusResult> {
   requireEmptyObject(request.data);
-  const member = requireAuthenticatedMember(request);
+  const authenticatedIdentity = requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const now = Timestamp.now();
   return database.runTransaction(async (transaction) => {
-    const approvalReference = database.doc(`memberApprovals/${member.uid}`);
-    const membershipReference = database.doc(`pairMemberships/${member.uid}`);
+    const approvalReference = database.doc(
+      `memberApprovals/${authenticatedIdentity.uid}`,
+    );
+    const membershipReference = database.doc(
+      `pairMemberships/${authenticatedIdentity.uid}`,
+    );
     const [approval, membership] = await transaction.getAll(
       approvalReference,
       membershipReference,
@@ -224,8 +248,12 @@ async function getPairingStatus(
     ) {
       throw new HttpsError("data-loss", "The Pair is malformed.");
     }
-    const self = members.find((candidate) => candidate.uid === member.uid);
-    const partner = members.find((candidate) => candidate.uid !== member.uid);
+    const self = members.find(
+      (candidate) => candidate.uid === authenticatedIdentity.uid,
+    );
+    const partner = members.find(
+      (candidate) => candidate.uid !== authenticatedIdentity.uid,
+    );
     if (self === undefined || partner === undefined) {
       throw new HttpsError("permission-denied", "The Member is not in this Pair.");
     }
@@ -247,15 +275,14 @@ async function getPairingStatus(
         throw new HttpsError("data-loss", "The pending Pair has no expiry.");
       }
       if (confirmationExpiresAt.toMillis() <= now.toMillis()) {
-        transaction.update(pairReference, {
-          expiredAt: now,
-          state: "EXPIRED",
-          updatedAt: now,
+        expirePendingPair(transaction, {
+          memberMembershipReference: membershipReference,
+          now,
+          pairId,
+          pairReference,
+          partnerMembershipData: partnerMembership.data(),
+          partnerMembershipReference,
         });
-        transaction.delete(membershipReference);
-        if (membershipBelongsToPair(partnerMembership.data(), pairId)) {
-          transaction.delete(partnerMembershipReference);
-        }
         return { state: "UNPAIRED" } as const;
       }
     }
@@ -276,7 +303,7 @@ async function getPairingStatus(
 async function acceptPairInvite(
   request: CallableRequest<unknown>,
 ): Promise<PairingStatusResult> {
-  const acceptingMember = requireAuthenticatedMember(request);
+  const acceptingIdentity = requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const normalizedCode = normalizeInviteCode(extractPairInviteCode(request.data));
   const inviteDocumentId =
@@ -286,13 +313,13 @@ async function acceptPairInvite(
 
   const outcome = await database.runTransaction(async (transaction) => {
     const acceptingApprovalReference = database.doc(
-      `memberApprovals/${acceptingMember.uid}`,
+      `memberApprovals/${acceptingIdentity.uid}`,
     );
     const acceptingMembershipReference = database.doc(
-      `pairMemberships/${acceptingMember.uid}`,
+      `pairMemberships/${acceptingIdentity.uid}`,
     );
     const rateLimitReference = database.doc(
-      `inviteRateLimits/${acceptingMember.uid}`,
+      `inviteRateLimits/${acceptingIdentity.uid}`,
     );
     const inviteReference = database.doc(`pairInvites/${inviteDocumentId}`);
     const [acceptingApproval, acceptingMembership, rateLimit, invite] =
@@ -327,7 +354,7 @@ async function acceptPairInvite(
       );
       return inviteData;
     }
-    if (inviteData.creatorUid === acceptingMember.uid) {
+    if (inviteData.creatorUid === acceptingIdentity.uid) {
       transaction.set(
         rateLimitReference,
         nextFailedAcceptRate(rateLimit.data(), now),
@@ -358,7 +385,7 @@ async function acceptPairInvite(
     );
     const members = [
       pairMember(inviteData.creatorUid, inviteData.creatorIdentity),
-      pairMember(acceptingMember.uid, acceptingMember.identity),
+      pairMember(acceptingIdentity.uid, acceptingIdentity.displayIdentity),
     ];
     transaction.create(pairReference, {
       confirmationExpiresAt,
@@ -369,7 +396,7 @@ async function acceptPairInvite(
     });
     transaction.create(
       creatingMembershipReference,
-      membershipLock(pairReference.id, acceptingMember.uid, now),
+      membershipLock(pairReference.id, acceptingIdentity.uid, now),
     );
     transaction.create(
       acceptingMembershipReference,
@@ -377,7 +404,7 @@ async function acceptPairInvite(
     );
     transaction.update(inviteReference, {
       consumedAt: now,
-      consumedByUid: acceptingMember.uid,
+      consumedByUid: acceptingIdentity.uid,
       pairId: pairReference.id,
       status: "CONSUMED",
     });
@@ -411,7 +438,7 @@ async function createPairInvite(
   request: CallableRequest<unknown>,
 ): Promise<CreatePairInviteResult> {
   requireEmptyObject(request.data);
-  const member = requireAuthenticatedMember(request);
+  const authenticatedIdentity = requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const code = generateInviteCode();
   const inviteHash = hashInviteCode(code);
@@ -419,9 +446,15 @@ async function createPairInvite(
   const expiresAt = Timestamp.fromMillis(now.toMillis() + INVITE_TTL_MILLIS);
 
   await database.runTransaction(async (transaction) => {
-    const approvalReference = database.doc(`memberApprovals/${member.uid}`);
-    const membershipReference = database.doc(`pairMemberships/${member.uid}`);
-    const rateLimitReference = database.doc(`inviteRateLimits/${member.uid}`);
+    const approvalReference = database.doc(
+      `memberApprovals/${authenticatedIdentity.uid}`,
+    );
+    const membershipReference = database.doc(
+      `pairMemberships/${authenticatedIdentity.uid}`,
+    );
+    const rateLimitReference = database.doc(
+      `inviteRateLimits/${authenticatedIdentity.uid}`,
+    );
     const inviteReference = database.doc(`pairInvites/${inviteHash}`);
     const [approval, membership, rateLimit, invite] = await transaction.getAll(
       approvalReference,
@@ -444,8 +477,8 @@ async function createPairInvite(
     const rate = nextCreateRate(rateLimit.data(), now);
     transaction.set(rateLimitReference, rate, { merge: true });
     transaction.create(inviteReference, {
-      creatorIdentity: member.identity,
-      creatorUid: member.uid,
+      creatorIdentity: authenticatedIdentity.displayIdentity,
+      creatorUid: authenticatedIdentity.uid,
       createdAt: now,
       expiresAt,
       status: "OPEN",
@@ -458,9 +491,9 @@ async function createPairInvite(
   };
 }
 
-function requireAuthenticatedMember(
+function requireAuthenticatedGoogleIdentity(
   request: CallableRequest<unknown>,
-): AuthenticatedMember {
+): AuthenticatedGoogleIdentity {
   if (request.auth === undefined) {
     throw new HttpsError("unauthenticated", "Sign in to use Pairing.");
   }
@@ -487,7 +520,7 @@ function requireAuthenticatedMember(
 
   return {
     uid: request.auth.uid,
-    identity: {
+    displayIdentity: {
       displayName,
       photoUrl: normalizedIdentityField(request.auth.token.picture),
     },
@@ -577,7 +610,7 @@ function inspectOpenInvite(
     };
   }
   const creatorUid = normalizedIdentityField(data.creatorUid);
-  const creatorIdentity = asMemberIdentity(data.creatorIdentity);
+  const creatorIdentity = asGoogleDisplayIdentity(data.creatorIdentity);
   if (creatorUid === null || creatorIdentity === null) {
     throw new HttpsError("data-loss", "The Pair Invite is malformed.");
   }
@@ -608,6 +641,21 @@ function requireMatchingMembership(
   }
 }
 
+function expirePendingPair(
+  transaction: Transaction,
+  expiry: PendingPairExpiry,
+): void {
+  transaction.update(expiry.pairReference, {
+    expiredAt: expiry.now,
+    state: "EXPIRED",
+    updatedAt: expiry.now,
+  });
+  transaction.delete(expiry.memberMembershipReference);
+  if (membershipBelongsToPair(expiry.partnerMembershipData, expiry.pairId)) {
+    transaction.delete(expiry.partnerMembershipReference);
+  }
+}
+
 function membershipBelongsToPair(
   data: FirebaseFirestore.DocumentData | undefined,
   pairId: string,
@@ -618,7 +666,7 @@ function membershipBelongsToPair(
   );
 }
 
-function asMemberIdentity(value: unknown): MemberIdentity | null {
+function asGoogleDisplayIdentity(value: unknown): GoogleDisplayIdentity | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -631,7 +679,7 @@ function asMemberIdentity(value: unknown): MemberIdentity | null {
     : { displayName, photoUrl };
 }
 
-function pairMember(uid: string, identity: MemberIdentity) {
+function pairMember(uid: string, identity: GoogleDisplayIdentity) {
   return {
     confirmed: false,
     identity,
@@ -641,7 +689,11 @@ function pairMember(uid: string, identity: MemberIdentity) {
 
 function asPairMembers(
   value: unknown,
-): Array<{ confirmed: boolean; identity: MemberIdentity; uid: string }> | null {
+): Array<{
+  confirmed: boolean;
+  identity: GoogleDisplayIdentity;
+  uid: string;
+}> | null {
   if (!Array.isArray(value) || value.length !== 2) {
     return null;
   }
@@ -651,7 +703,7 @@ function asPairMembers(
     }
     const fields = candidate as Record<string, unknown>;
     const uid = normalizedIdentityField(fields.uid);
-    const identity = asMemberIdentity(fields.identity);
+    const identity = asGoogleDisplayIdentity(fields.identity);
     return uid === null || identity === null || typeof fields.confirmed !== "boolean"
       ? null
       : { confirmed: fields.confirmed, identity, uid };
@@ -664,15 +716,15 @@ function asPairMembers(
   }
   return members as Array<{
     confirmed: boolean;
-    identity: MemberIdentity;
+    identity: GoogleDisplayIdentity;
     uid: string;
   }>;
 }
 
 function pairingStatus(
   pairId: string,
-  self: { confirmed: boolean; identity: MemberIdentity; uid: string },
-  partner: { confirmed: boolean; identity: MemberIdentity; uid: string },
+  self: { confirmed: boolean; identity: GoogleDisplayIdentity; uid: string },
+  partner: { confirmed: boolean; identity: GoogleDisplayIdentity; uid: string },
   state: "ACTIVE" | "PENDING_CONFIRMATION",
 ) {
   return {

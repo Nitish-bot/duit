@@ -74,7 +74,7 @@ after(async () => {
 });
 
 test("an approved unpaired Member can create a short-lived Pair Invite", async () => {
-  const alice = await createMember("Alice Example");
+  const alice = await createGoogleIdentity("Alice Example");
   await approve(alice.uid);
 
   const beforeCreation = Date.now();
@@ -95,8 +95,8 @@ test("an approved unpaired Member can create a short-lived Pair Invite", async (
 });
 
 test("entering a Pair Invite creates one inactive two-Member match and consumes the code", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
   await Promise.all([approve(alice.uid), approve(bob.uid)]);
   const invite = await call(alice, "createPairInvite", {});
 
@@ -139,9 +139,9 @@ test("entering a Pair Invite creates one inactive two-Member match and consumes 
 });
 
 test("only each pending participant receives the Partner identity through Pairing status", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
-  const carol = await createMember("Carol Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
+  const carol = await createGoogleIdentity("Carol Example");
   await Promise.all([approve(alice.uid), approve(bob.uid), approve(carol.uid)]);
   const invite = await call(alice, "createPairInvite", {});
   const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
@@ -170,8 +170,8 @@ test("only each pending participant receives the Partner identity through Pairin
 });
 
 test("a Pair activates atomically only after both Members explicitly confirm", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
   await Promise.all([approve(alice.uid), approve(bob.uid)]);
   const invite = await call(alice, "createPairInvite", {});
   const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
@@ -218,8 +218,8 @@ test("a Pair activates atomically only after both Members explicitly confirm", a
 });
 
 test("active Pair status requires continuing approvals and reciprocal membership locks", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
   await Promise.all([approve(alice.uid), approve(bob.uid)]);
   const invite = await call(alice, "createPairInvite", {});
   const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
@@ -256,8 +256,8 @@ test("active Pair status requires continuing approvals and reciprocal membership
 });
 
 test("failed code guesses persist a cooldown that also blocks a later valid code", async () => {
-  const alice = await createMember("Alice Example");
-  const mallory = await createMember("Mallory Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const mallory = await createGoogleIdentity("Mallory Example");
   await Promise.all([approve(alice.uid), approve(mallory.uid)]);
   const invite = await call(alice, "createPairInvite", {});
 
@@ -288,8 +288,8 @@ test("failed code guesses persist a cooldown that also blocks a later valid code
 });
 
 test("an expired pending Pair cannot activate and releases both membership locks", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
   await Promise.all([approve(alice.uid), approve(bob.uid)]);
   const invite = await call(alice, "createPairInvite", {});
   const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
@@ -313,8 +313,8 @@ test("an expired pending Pair cannot activate and releases both membership locks
 });
 
 test("Pairing status expires a stale pending Pair so both Members can retry", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
   await Promise.all([approve(alice.uid), approve(bob.uid)]);
   const invite = await call(alice, "createPairInvite", {});
   const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
@@ -343,9 +343,9 @@ test("Pairing status expires a stale pending Pair so both Members can retry", as
 });
 
 test("self, expired, and replayed Pair Invite codes are rejected without stray membership", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
-  const carol = await createMember("Carol Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
+  const carol = await createGoogleIdentity("Carol Example");
   await Promise.all([approve(alice.uid), approve(bob.uid), approve(carol.uid)]);
 
   const selfInvite = await call(alice, "createPairInvite", {});
@@ -390,8 +390,8 @@ test("self, expired, and replayed Pair Invite codes are rejected without stray m
 });
 
 test("unapproved identities cannot create or enter Pair Invites", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
   await rejectsWithCode(
     () => call(alice, "createPairInvite", {}),
     "functions/permission-denied",
@@ -414,9 +414,9 @@ test("unapproved identities cannot create or enter Pair Invites", async () => {
 });
 
 test("already-paired and third Members cannot join or confirm another Pair", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
-  const carol = await createMember("Carol Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
+  const carol = await createGoogleIdentity("Carol Example");
   await Promise.all([approve(alice.uid), approve(bob.uid), approve(carol.uid)]);
   const aliceInvite = await call(alice, "createPairInvite", {});
   const aliceAndBob = await call(bob, "acceptPairInvite", {
@@ -446,7 +446,7 @@ test("already-paired and third Members cannot join or confirm another Pair", asy
 });
 
 test("Pair Invite creation is bounded by a persisted per-Member rate limit", async () => {
-  const alice = await createMember("Alice Example");
+  const alice = await createGoogleIdentity("Alice Example");
   await approve(alice.uid);
 
   await call(alice, "createPairInvite", {});
@@ -469,9 +469,9 @@ test("Pair Invite creation is bounded by a persisted per-Member rate limit", asy
 });
 
 test("simultaneous acceptance gives one inviter exactly one pending Partner", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
-  const carol = await createMember("Carol Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
+  const carol = await createGoogleIdentity("Carol Example");
   await Promise.all([approve(alice.uid), approve(bob.uid), approve(carol.uid)]);
   const invite = await call(alice, "createPairInvite", {});
 
@@ -495,9 +495,9 @@ test("simultaneous acceptance gives one inviter exactly one pending Partner", as
 });
 
 test("simultaneous Pair Invites give one accepting Member exactly one pending Partner", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
-  const carol = await createMember("Carol Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
+  const carol = await createGoogleIdentity("Carol Example");
   await Promise.all([approve(alice.uid), approve(bob.uid), approve(carol.uid)]);
   const [aliceInvite, carolInvite] = await Promise.all([
     call(alice, "createPairInvite", {}),
@@ -524,10 +524,10 @@ test("simultaneous Pair Invites give one accepting Member exactly one pending Pa
 });
 
 test("two independent Pairs can activate concurrently without membership crossing", async () => {
-  const alice = await createMember("Alice Example");
-  const bob = await createMember("Bob Example");
-  const carol = await createMember("Carol Example");
-  const dave = await createMember("Dave Example");
+  const alice = await createGoogleIdentity("Alice Example");
+  const bob = await createGoogleIdentity("Bob Example");
+  const carol = await createGoogleIdentity("Carol Example");
+  const dave = await createGoogleIdentity("Dave Example");
   await Promise.all(
     [alice, bob, carol, dave].map(({ uid }) => approve(uid)),
   );
@@ -567,7 +567,7 @@ test("two independent Pairs can activate concurrently without membership crossin
   );
 });
 
-async function createMember(displayName) {
+async function createGoogleIdentity(displayName) {
   identitySequence += 1;
   const app = initializeApp(
     {
