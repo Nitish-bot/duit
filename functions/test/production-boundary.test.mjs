@@ -8,6 +8,14 @@ test("the emulator readiness probe is absent from the production Functions bound
   const productionFunctions = await import("../lib/index.js");
 
   assert.equal(Object.hasOwn(productionFunctions, "emulatorReady"), false);
+  for (const callable of [
+    "acceptPairInvite",
+    "confirmPair",
+    "createPairInvite",
+    "getPairingStatus",
+  ]) {
+    assert.equal(Object.hasOwn(productionFunctions, callable), false);
+  }
 });
 
 test("production and emulator configurations use distinct Functions sources", async () => {
