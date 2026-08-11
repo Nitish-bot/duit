@@ -57,11 +57,11 @@ test("Pairing callables require Firebase Authentication", async () => {
 });
 
 test("an approved Firebase identity that did not sign in with Google cannot use Pairing", async () => {
-  const passwordMember = await createPasswordMember("Password Example");
-  await approve(passwordMember.uid);
+  const passwordIdentity = await createPasswordIdentity("Password Example");
+  await approve(passwordIdentity.uid);
 
   await rejectsWithCode(
-    () => call(passwordMember, "createPairInvite", {}),
+    () => call(passwordIdentity, "createPairInvite", {}),
     "functions/permission-denied",
   );
 });
@@ -604,7 +604,7 @@ async function createGoogleIdentity(displayName) {
   };
 }
 
-async function createPasswordMember(displayName) {
+async function createPasswordIdentity(displayName) {
   identitySequence += 1;
   const app = initializeApp(
     {
@@ -649,8 +649,8 @@ async function approve(uid, approved = true) {
   await adminDatabase.doc(`memberApprovals/${uid}`).set({ approved });
 }
 
-async function call(member, functionName, data) {
-  const callable = httpsCallable(member.functions, functionName);
+async function call(client, functionName, data) {
+  const callable = httpsCallable(client.functions, functionName);
   const result = await callable(data);
   return result.data;
 }
