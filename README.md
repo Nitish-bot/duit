@@ -115,7 +115,7 @@ Type-check the Functions package:
 npm --prefix functions run typecheck
 ```
 
-Run its automated test. This builds the Functions package, starts both the Functions and Firestore Emulators for the local-only `demo-duit` project, checks the emulator-only Function plus Member Approval/owner-isolation Rules, and shuts the emulators down:
+Run its automated test. This builds the Functions package, starts the Auth, Functions, and Firestore Emulators for the local-only `demo-duit` project, checks the emulator-only Functions plus Member Approval/owner-isolation Rules, and shuts the emulators down:
 
 ```sh
 npm --prefix functions test
