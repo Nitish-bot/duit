@@ -25,11 +25,18 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
 import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.OccurrenceKey
+import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
+import com.gaylord.duit.domain.model.SubtaskIdentifier
 import com.gaylord.duit.domain.model.TaskIdentifier
 import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
 import com.gaylord.duit.feature.today.TodayTaskTitleInputTag
+import com.gaylord.duit.feature.today.TodayTaskRepeatDailyTag
+import com.gaylord.duit.feature.today.TodayTaskSubtaskInputTag
 import com.gaylord.duit.workspace.AgendaTask
+import com.gaylord.duit.workspace.AgendaOccurrence
+import com.gaylord.duit.workspace.AgendaSubtask
 import com.gaylord.duit.workspace.AuthenticationSignOutFailure
 import com.gaylord.duit.workspace.CommandIdentifier
 import com.gaylord.duit.workspace.MemberApprovalFailure
@@ -103,6 +110,56 @@ class DuitAppTest {
     }
 
     @Test
+    fun readyWorkspaceShowsTheDailyOccurrenceAndItsUncheckedSubtaskOnToday() {
+        val date = LocalDate.of(2026, 8, 9)
+        composeRule.setContent {
+            DuitApp(
+                darkTheme = false,
+                personalAgenda =
+                    PersonalAgenda(
+                        date = date,
+                        tasks =
+                            listOf(
+                                AgendaTask(
+                                    identifier = TaskIdentifier("task-daily"),
+                                    revisionIdentifier = null,
+                                    title = "Water the herbs",
+                                    plannedDate = null,
+                                    visibility = TaskVisibility.Private,
+                                    reminderAt = null,
+                                    seriesRevisionIdentifier =
+                                        SeriesRevisionIdentifier("revision-daily"),
+                                    occurrence =
+                                        AgendaOccurrence(
+                                            key =
+                                                OccurrenceKey(
+                                                    TaskIdentifier("task-daily"),
+                                                    date,
+                                                ),
+                                            nominalDate = date,
+                                            effectiveDate = date,
+                                            subtasks =
+                                                listOf(
+                                                    AgendaSubtask(
+                                                        identifier =
+                                                            SubtaskIdentifier("subtask-soil"),
+                                                        label = "Check the soil",
+                                                        isChecked = false,
+                                                    ),
+                                                ),
+                                        ),
+                                ),
+                            ),
+                    ),
+            )
+        }
+
+        composeRule.onNodeWithText("Water the herbs").assertIsDisplayed()
+        composeRule.onNodeWithText("Daily · Today").assertIsDisplayed()
+        composeRule.onNodeWithText("Unchecked · Check the soil").assertIsDisplayed()
+    }
+
+    @Test
     fun blankPrivateTaskCannotBeAdded() {
         val addedTitles = mutableListOf<String>()
 
@@ -119,6 +176,35 @@ class DuitAppTest {
         composeRule.onNode(hasSetTextAction()).performTextInput("   ")
         composeRule.onNodeWithText("Add Task").assertIsNotEnabled()
         assertEquals(emptyList<String>(), addedTitles)
+    }
+
+    @Test
+    fun dailyTaskAddLetsTheOwnerChooseDailyAndOneNormalizedSubtask() {
+        val additions = mutableListOf<DailyTaskAddition>()
+
+        composeRule.setContent {
+            DuitApp(
+                darkTheme = false,
+                onAddPrivateDailyTaskToToday = { _, title, subtask, result ->
+                    additions += DailyTaskAddition(title, subtask)
+                    result(true)
+                },
+            )
+        }
+
+        composeRule.onNodeWithTag(TodayTaskRepeatDailyTag).performScrollTo().performClick()
+        composeRule.onNodeWithTag(TodayTaskTitleInputTag)
+            .performTextInput("  Water the herbs  ")
+        composeRule.onNodeWithTag(TodayTaskSubtaskInputTag)
+            .performTextInput("  Check the soil  ")
+        composeRule.onNodeWithText("Add Task").performScrollTo().performClick()
+
+        assertEquals(
+            listOf(DailyTaskAddition("Water the herbs", "Check the soil")),
+            additions,
+        )
+        composeRule.onNodeWithTag(TodayTaskTitleInputTag).assertEditableTextEquals("")
+        composeRule.onNodeWithTag(TodayTaskSubtaskInputTag).assertDoesNotExist()
     }
 
     @Test
@@ -468,6 +554,11 @@ class DuitAppTest {
                 ),
         )
 }
+
+private data class DailyTaskAddition(
+    val title: String,
+    val subtask: String?,
+)
 
 private fun SemanticsNodeInteraction.assertEditableTextEquals(value: String) =
     assert(

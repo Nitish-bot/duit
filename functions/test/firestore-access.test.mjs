@@ -112,6 +112,34 @@ describe("owner workspace isolation", () => {
     await assertFails(getDoc(doc(otherDatabase, taskPath)));
   });
 
+  test("another approved Member cannot query or deep-link into a private Daily Series", async () => {
+    await seedApproval("member-a");
+    await seedApproval("member-b");
+    const ownerDatabase = memberDatabase("member-a");
+    const otherDatabase = memberDatabase("member-b");
+    const taskPath = "users/member-a/tasks/private-daily";
+    const revisionPath = `${taskPath}/revisions/revision-1`;
+
+    await assertSucceeds(
+      setDoc(doc(ownerDatabase, taskPath), {
+        kind: "RECURRING_SERIES",
+        ownerUid: "member-a",
+        visibility: "PRIVATE",
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(ownerDatabase, revisionPath), {
+        recurrenceKind: "DAILY",
+        title: "Private Daily Task",
+      }),
+    );
+
+    await assertFails(
+      getDocs(collection(otherDatabase, "users/member-a/tasks")),
+    );
+    await assertFails(getDoc(doc(otherDatabase, revisionPath)));
+  });
+
   test("a false approval does not unlock the workspace", async () => {
     await seedApproval("member-a", false);
     const database = memberDatabase("member-a");

@@ -81,12 +81,19 @@ fun DuitApp(
         { _, _, result ->
             result(false)
         },
+    onAddPrivateDailyTaskToToday: (
+        CommandIdentifier,
+        String,
+        String?,
+        (Boolean) -> Unit,
+    ) -> Unit = { _, _, _, result -> result(false) },
 ) {
     DuitTheme(darkTheme = darkTheme) {
         when (accessState) {
             is WorkspaceAccessState.Ready -> DuitShell(
                 personalAgenda = personalAgenda,
                 onAddPrivateTaskToToday = onAddPrivateTaskToToday,
+                onAddPrivateDailyTaskToToday = onAddPrivateDailyTaskToToday,
             )
             else -> WorkspaceAccessGate(
                 accessState = accessState,
@@ -310,6 +317,12 @@ private fun DuitShell(
         { _, _, result ->
             result(false)
         },
+    onAddPrivateDailyTaskToToday: (
+        CommandIdentifier,
+        String,
+        String?,
+        (Boolean) -> Unit,
+    ) -> Unit = { _, _, _, result -> result(false) },
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: DuitDestination.Today.route
@@ -365,6 +378,7 @@ private fun DuitShell(
                 TodayScreen(
                     personalAgenda = personalAgenda,
                     onAddPrivateTaskToToday = onAddPrivateTaskToToday,
+                    onAddPrivateDailyTaskToToday = onAddPrivateDailyTaskToToday,
                 )
             }
             composable(DuitDestination.Together.route) { TogetherScreen() }

@@ -2,8 +2,12 @@ package com.gaylord.duit.workspace
 
 import com.gaylord.duit.data.repository.TaskRepository
 import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.OccurrenceKey
+import com.gaylord.duit.domain.model.RecurringSeriesCreation
+import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
 import com.gaylord.duit.domain.model.TaskIdentifier
+import com.gaylord.duit.domain.model.TaskVisibility
 import com.gaylord.duit.notifications.ReminderGateway
 import com.gaylord.duit.notifications.ScheduledTaskReminder
 import java.time.Clock
@@ -148,6 +152,60 @@ class DuitWorkspaceAccessTest {
                     tasksAtUnlock = tasksAfterHydration,
                     createdTaskIdentifier = createdTaskIdentifier,
                 ),
+            )
+        }
+
+    @Test
+    fun `approved hydrated unpaired Member can create a private Daily Task offline`() =
+        runTest {
+            val memberIdentifier = MemberIdentifier("member-alex")
+            val persistence = AccessTestTaskRepository()
+            val workspace =
+                createAuthenticatedWorkspace(
+                    authentication = FakeAuthentication(AuthenticatedIdentity("member-alex")),
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    persistence = persistence,
+                )
+
+            workspace.restoreSession()
+            val taskIdentifier =
+                workspace.execute(
+                    MemberCommand.AddPrivateDailyTaskToToday(
+                        commandIdentifier = CommandIdentifier("hydrated-daily"),
+                        title = "  Water the herbs  ",
+                        subtask = "  Check the soil  ",
+                    ),
+                )
+            val agenda = workspace.observePersonalAgenda().first()
+
+            assertEquals(
+                WorkspaceAccessState.Ready(
+                    memberIdentifier = memberIdentifier,
+                    restorationSource = WorkspaceRestorationSource.Server,
+                ),
+                workspace.accessState.value,
+            )
+            assertEquals(
+                HydratedDailyObservation(
+                    taskIdentifier = TaskIdentifier("task-hydrated-daily"),
+                    title = "Water the herbs",
+                    visibility = TaskVisibility.Private,
+                    occurrenceKey =
+                        OccurrenceKey(
+                            TaskIdentifier("task-hydrated-daily"),
+                            LocalDate.of(2026, 8, 9),
+                        ),
+                    subtaskLabels = listOf("Check the soil"),
+                ),
+                agenda.tasks.single().let { task ->
+                    HydratedDailyObservation(
+                        taskIdentifier = taskIdentifier,
+                        title = task.title,
+                        visibility = task.visibility,
+                        occurrenceKey = task.occurrence?.key,
+                        subtaskLabels = task.occurrence?.subtasks.orEmpty().map(AgendaSubtask::label),
+                    )
+                },
             )
         }
 
@@ -819,6 +877,14 @@ private data class ReadyWorkspaceObservation(
     val createdTaskIdentifier: TaskIdentifier,
 )
 
+private data class HydratedDailyObservation(
+    val taskIdentifier: TaskIdentifier,
+    val title: String,
+    val visibility: TaskVisibility,
+    val occurrenceKey: OccurrenceKey?,
+    val subtaskLabels: List<String>,
+)
+
 private data class FailedWorkspaceObservation(
     val accessState: WorkspaceAccessState,
     val availableActions: Set<WorkspaceAccessAction>,
@@ -886,6 +952,8 @@ private fun createAuthenticatedWorkspace(
                     com.gaylord.duit.domain.model.TaskRevisionIdentifier(
                         "revision-${commandIdentifier.value}",
                     ),
+                seriesRevisionIdentifier =
+                    SeriesRevisionIdentifier("revision-${commandIdentifier.value}"),
             )
         },
         persistence = persistence,
@@ -1048,6 +1116,8 @@ private class DeferredHydrationGateway : OwnerWorkspaceHydrationGateway {
 private class AccessTestTaskRepository : TaskRepository {
     private val creations =
         MutableStateFlow<Map<TaskIdentifier, StandaloneTaskCreation>>(emptyMap())
+    private val recurringCreations =
+        MutableStateFlow<Map<TaskIdentifier, RecurringSeriesCreation>>(emptyMap())
 
     override suspend fun putStandaloneTaskIfAbsent(
         creation: StandaloneTaskCreation,
@@ -1076,6 +1146,32 @@ private class AccessTestTaskRepository : TaskRepository {
     ): Flow<StandaloneTaskCreation?> =
         creations.map { stored ->
             stored[taskIdentifier]?.takeIf { it.task.ownerIdentifier == ownerIdentifier }
+        }
+
+    override suspend fun putRecurringSeriesIfAbsent(
+        creation: RecurringSeriesCreation,
+    ): RecurringSeriesCreation {
+        val existing = recurringCreations.value[creation.series.identifier]
+        if (existing != null) return existing
+
+        recurringCreations.value =
+            recurringCreations.value + (creation.series.identifier to creation)
+        return creation
+    }
+
+    override fun observeRecurringSeries(
+        ownerIdentifier: MemberIdentifier,
+    ): Flow<List<RecurringSeriesCreation>> =
+        recurringCreations.map { stored ->
+            stored.values.filter { it.series.ownerIdentifier == ownerIdentifier }
+        }
+
+    override fun observeRecurringSeries(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+    ): Flow<RecurringSeriesCreation?> =
+        recurringCreations.map { stored ->
+            stored[taskIdentifier]?.takeIf { it.series.ownerIdentifier == ownerIdentifier }
         }
 }
 

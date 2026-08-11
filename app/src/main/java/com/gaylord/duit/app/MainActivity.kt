@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
                 onAccessAction = ::handleAccessAction,
                 personalAgenda = personalAgenda,
                 onAddPrivateTaskToToday = ::addPrivateTaskToToday,
+                onAddPrivateDailyTaskToToday = ::addPrivateDailyTaskToToday,
             )
         }
 
@@ -87,6 +88,33 @@ class MainActivity : ComponentActivity() {
         commandIdentifier: CommandIdentifier,
         title: String,
         onResult: (Boolean) -> Unit,
+    ) = submitTaskCreation(
+        command =
+            MemberCommand.AddPrivateTaskToToday(
+                commandIdentifier = commandIdentifier,
+                title = title,
+            ),
+        onResult = onResult,
+    )
+
+    private fun addPrivateDailyTaskToToday(
+        commandIdentifier: CommandIdentifier,
+        title: String,
+        subtask: String?,
+        onResult: (Boolean) -> Unit,
+    ) = submitTaskCreation(
+        command =
+            MemberCommand.AddPrivateDailyTaskToToday(
+                commandIdentifier = commandIdentifier,
+                title = title,
+                subtask = subtask,
+            ),
+        onResult = onResult,
+    )
+
+    private fun submitTaskCreation(
+        command: MemberCommand,
+        onResult: (Boolean) -> Unit,
     ) {
         if (workspaceActionJob?.isActive == true) {
             onResult(false)
@@ -96,12 +124,7 @@ class MainActivity : ComponentActivity() {
         workspaceActionJob =
             lifecycleScope.launch {
                 try {
-                    workspace.execute(
-                        MemberCommand.AddPrivateTaskToToday(
-                            commandIdentifier = commandIdentifier,
-                            title = title,
-                        ),
-                    )
+                    workspace.execute(command)
                     onResult(true)
                 } catch (cancellation: CancellationException) {
                     throw cancellation

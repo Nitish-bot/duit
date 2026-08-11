@@ -1,6 +1,7 @@
 package com.gaylord.duit.app.runtime
 
 import com.gaylord.duit.domain.model.TaskIdentifier
+import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.platform.firebase.FirebaseRuntime
 import com.gaylord.duit.workspace.DuitWorkspace
@@ -32,6 +33,8 @@ internal fun createRuntimeWorkspace(firebaseRuntime: FirebaseRuntime): DuitWorks
                     taskIdentifier = TaskIdentifier("task-${commandIdentifier.value}"),
                     revisionIdentifier =
                         TaskRevisionIdentifier("revision-${commandIdentifier.value}"),
+                    seriesRevisionIdentifier =
+                        SeriesRevisionIdentifier("revision-${commandIdentifier.value}"),
                 )
             },
         persistence = workspaceServices?.tasks,

@@ -43,10 +43,17 @@
     <string name="today_intro">Make room for what matters, one Task at a time.</string>
     <string name="today_task_title_label">Task title</string>
     <string name="today_task_private_note">New Tasks start private.</string>
+    <string name="today_task_repeat_label">Repeat</string>
+    <string name="today_task_repeat_never">Never</string>
+    <string name="today_task_repeat_daily">Daily</string>
+    <string name="today_task_subtask_label">Subtask</string>
+    <string name="today_task_subtask_optional_note">Optional · each day starts unchecked.</string>
     <string name="today_add_task">Add Task</string>
     <string name="task_creation_failed">Duit couldn’t add that Task. Your existing Tasks are unchanged.</string>
     <string name="today_empty_title">Your day is clear</string>
     <string name="today_empty_body">When Tasks are ready, they’ll settle here without noise.</string>
+    <string name="today_daily_occurrence">Daily · Today</string>
+    <string name="today_unchecked_subtask">Unchecked · %1$s</string>
 
     <string name="together_intro">A calm window into what your Partner chooses to share.</string>
     <string name="together_empty_title">Just the two of you</string>

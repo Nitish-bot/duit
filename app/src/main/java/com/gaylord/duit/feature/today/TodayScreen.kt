@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -46,8 +48,16 @@ fun TodayScreen(
         { _, _, result ->
             result(false)
         },
+    onAddPrivateDailyTaskToToday: (
+        CommandIdentifier,
+        String,
+        String?,
+        (Boolean) -> Unit,
+    ) -> Unit = { _, _, _, result -> result(false) },
 ) {
     var taskTitle by rememberSaveable { mutableStateOf("") }
+    var taskSubtask by rememberSaveable { mutableStateOf("") }
+    var taskRepeat by rememberSaveable { mutableStateOf(TodayTaskRepeat.Never) }
     var pendingCommandIdentifier by rememberSaveable { mutableStateOf<String?>(null) }
     var submissionInProgress by remember { mutableStateOf(false) }
     val normalizedTitle = taskTitle.trim()
@@ -70,6 +80,10 @@ fun TodayScreen(
             AddPrivateTaskCard(
                 title = taskTitle,
                 onTitleChange = { taskTitle = it },
+                subtask = taskSubtask,
+                onSubtaskChange = { taskSubtask = it },
+                repeat = taskRepeat,
+                onRepeatChange = { taskRepeat = it },
                 enabled = !submissionInProgress && pendingCommandIdentifier == null,
                 canAdd = normalizedTitle.isNotEmpty() && !submissionInProgress,
                 onAdd = {
@@ -81,12 +95,36 @@ fun TodayScreen(
                                 pendingCommandIdentifier = identifier.value
                             }
                     submissionInProgress = true
-                    onAddPrivateTaskToToday(commandIdentifier, submittedTitle) { added ->
+                    val submittedRepeat = taskRepeat
+                    val submittedSubtask = taskSubtask.trim().takeIf(String::isNotEmpty)
+                    val onResult: (Boolean) -> Unit = { added ->
                         submissionInProgress = false
-                        if (added && taskTitle.trim() == submittedTitle) {
+                        if (
+                            added &&
+                            taskTitle.trim() == submittedTitle &&
+                            taskRepeat == submittedRepeat &&
+                            taskSubtask.trim().takeIf(String::isNotEmpty) == submittedSubtask
+                        ) {
                             taskTitle = ""
+                            taskSubtask = ""
+                            taskRepeat = TodayTaskRepeat.Never
                             pendingCommandIdentifier = null
                         }
+                    }
+                    when (submittedRepeat) {
+                        TodayTaskRepeat.Never ->
+                            onAddPrivateTaskToToday(
+                                commandIdentifier,
+                                submittedTitle,
+                                onResult,
+                            )
+                        TodayTaskRepeat.Daily ->
+                            onAddPrivateDailyTaskToToday(
+                                commandIdentifier,
+                                submittedTitle,
+                                submittedSubtask,
+                                onResult,
+                            )
                     }
                 },
             )
@@ -128,6 +166,10 @@ private fun TodayHeading() {
 private fun AddPrivateTaskCard(
     title: String,
     onTitleChange: (String) -> Unit,
+    subtask: String,
+    onSubtaskChange: (String) -> Unit,
+    repeat: TodayTaskRepeat,
+    onRepeatChange: (TodayTaskRepeat) -> Unit,
     enabled: Boolean,
     canAdd: Boolean,
     onAdd: () -> Unit,
@@ -152,6 +194,49 @@ private fun AddPrivateTaskCard(
                 supportingText = { Text(stringResource(R.string.today_task_private_note)) },
                 singleLine = true,
             )
+            Text(
+                text = stringResource(R.string.today_task_repeat_label),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FilterChip(
+                    selected = repeat == TodayTaskRepeat.Never,
+                    onClick = { onRepeatChange(TodayTaskRepeat.Never) },
+                    label = { Text(stringResource(R.string.today_task_repeat_never)) },
+                    enabled = enabled,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(TodayTaskRepeatNeverTag),
+                )
+                FilterChip(
+                    selected = repeat == TodayTaskRepeat.Daily,
+                    onClick = { onRepeatChange(TodayTaskRepeat.Daily) },
+                    label = { Text(stringResource(R.string.today_task_repeat_daily)) },
+                    enabled = enabled,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(TodayTaskRepeatDailyTag),
+                )
+            }
+            if (repeat == TodayTaskRepeat.Daily) {
+                OutlinedTextField(
+                    value = subtask,
+                    onValueChange = onSubtaskChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(TodayTaskSubtaskInputTag),
+                    enabled = enabled,
+                    label = { Text(stringResource(R.string.today_task_subtask_label)) },
+                    supportingText = {
+                        Text(stringResource(R.string.today_task_subtask_optional_note))
+                    },
+                    singleLine = true,
+                )
+            }
             Button(
                 onClick = onAdd,
                 enabled = canAdd,
@@ -166,6 +251,14 @@ private fun AddPrivateTaskCard(
 }
 
 internal const val TodayTaskTitleInputTag = "today-private-task-title"
+internal const val TodayTaskSubtaskInputTag = "today-private-task-subtask"
+internal const val TodayTaskRepeatNeverTag = "today-private-task-repeat-never"
+internal const val TodayTaskRepeatDailyTag = "today-private-task-repeat-daily"
+
+private enum class TodayTaskRepeat {
+    Never,
+    Daily,
+}
 
 @Composable
 private fun AgendaTaskCard(task: AgendaTask) {
@@ -178,12 +271,30 @@ private fun AgendaTaskCard(task: AgendaTask) {
             color = MaterialTheme.colorScheme.outlineVariant,
         ),
     ) {
-        Text(
-            text = task.title,
+        Column(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.titleMedium,
-        )
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = task.title,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            task.occurrence?.let { occurrence ->
+                Text(
+                    text = stringResource(R.string.today_daily_occurrence),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                occurrence.subtasks.forEach { subtask ->
+                    Text(
+                        text = stringResource(R.string.today_unchecked_subtask, subtask.label),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
     }
 }
 

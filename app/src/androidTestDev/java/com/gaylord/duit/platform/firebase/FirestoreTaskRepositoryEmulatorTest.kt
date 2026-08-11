@@ -7,8 +7,15 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.gaylord.duit.data.repository.TaskRepository
 import com.gaylord.duit.domain.model.MemberActionMoment
 import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.RecurrenceRule
+import com.gaylord.duit.domain.model.RecurringSeries
+import com.gaylord.duit.domain.model.RecurringSeriesCreation
+import com.gaylord.duit.domain.model.SeriesRevision
+import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
 import com.gaylord.duit.domain.model.StandaloneTask
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
+import com.gaylord.duit.domain.model.SubtaskIdentifier
+import com.gaylord.duit.domain.model.SubtaskTemplate
 import com.gaylord.duit.domain.model.TaskIdentifier
 import com.gaylord.duit.domain.model.TaskReminderConfiguration
 import com.gaylord.duit.domain.model.TaskRevision
@@ -16,6 +23,7 @@ import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
 import com.gaylord.duit.workspace.AuthenticationSignOut
 import com.gaylord.duit.workspace.AuthenticationSignOutFailure
+import com.gaylord.duit.workspace.OwnerWorkspaceHydration
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.firestore.FirebaseFirestore
@@ -123,6 +131,109 @@ class FirestoreTaskRepositoryEmulatorTest {
         assertEquals(creation.task.ownerIdentifier.value, taskSnapshot.getString("ownerUid"))
         assertEquals(creation.initialRevision.title, revisionSnapshot.getString("title"))
         assertEquals(creation.reminder?.time.toString(), reminderSnapshot.getString("localTime"))
+    }
+
+    @Test
+    fun offlineDailySeriesSurvivesReconstructionAndSynchronizesWithoutReplacement() = runBlocking {
+        val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
+        val creation = dailyCreation(ownerIdentifier)
+        val replay =
+            creation.copy(
+                initialRevision =
+                    creation.initialRevision.copy(title = "Do not replace the Daily Series"),
+            )
+
+        firestore.disableNetwork().await()
+        try {
+            assertEquals(creation, repository.putRecurringSeriesIfAbsent(creation))
+
+            firestore.terminate().await()
+            firestore = connectFirestoreToEmulator(firebaseApp)
+            firestore.disableNetwork().await()
+
+            assertEquals(
+                creation,
+                withTimeout(RepositoryObservationTimeoutMillis) {
+                    repository.observeRecurringSeries(
+                        ownerIdentifier = ownerIdentifier,
+                        taskIdentifier = creation.series.identifier,
+                    ).filterNotNull().first()
+                },
+            )
+            assertEquals(
+                listOf(creation),
+                withTimeout(RepositoryObservationTimeoutMillis) {
+                    repository.observeRecurringSeries(ownerIdentifier)
+                        .first { series ->
+                            series.any { it.series.identifier == creation.series.identifier }
+                        }
+                },
+            )
+            assertEquals(creation, repository.putRecurringSeriesIfAbsent(replay))
+        } finally {
+            firestore.enableNetwork().await()
+        }
+
+        withTimeout(ServerSynchronizationTimeoutMillis) {
+            firestore.waitForPendingWrites().await()
+        }
+
+        firestore.terminate().await()
+        firestore.clearPersistence().await()
+        firestore = connectFirestoreToEmulator(firebaseApp)
+        assertEquals(
+            OwnerWorkspaceHydration.Complete,
+            FirestoreOwnerWorkspaceHydrationGateway { firestore }.hydrate(ownerIdentifier),
+        )
+        assertEquals(
+            creation,
+            withTimeout(RepositoryObservationTimeoutMillis) {
+                repository.observeRecurringSeries(
+                    ownerIdentifier = ownerIdentifier,
+                    taskIdentifier = creation.series.identifier,
+                ).filterNotNull().first()
+            },
+        )
+    }
+
+    @Test
+    fun cachedStandaloneTaskIdentityCannotBeOverwrittenByADailySeries() = runBlocking {
+        val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
+        val standalone = creation(ownerIdentifier)
+        val daily = dailyCreation(ownerIdentifier)
+        val collidingDaily =
+            daily.copy(
+                series = daily.series.copy(identifier = standalone.task.identifier),
+                initialRevision =
+                    daily.initialRevision.copy(taskIdentifier = standalone.task.identifier),
+            )
+
+        firestore.disableNetwork().await()
+        try {
+            repository.putStandaloneTaskIfAbsent(standalone)
+
+            val failure =
+                runCatching {
+                    repository.putRecurringSeriesIfAbsent(collidingDaily)
+                }.exceptionOrNull()
+
+            assertTrue(failure is IllegalStateException)
+            assertEquals(
+                standalone,
+                withTimeout(RepositoryObservationTimeoutMillis) {
+                    repository.observeStandaloneTask(
+                        ownerIdentifier = ownerIdentifier,
+                        taskIdentifier = standalone.task.identifier,
+                    ).filterNotNull().first()
+                },
+            )
+        } finally {
+            firestore.enableNetwork().await()
+        }
+        withTimeout(ServerSynchronizationTimeoutMillis) {
+            firestore.waitForPendingWrites().await()
+        }
+        Unit
     }
 
     @Test
@@ -240,6 +351,45 @@ class FirestoreTaskRepositoryEmulatorTest {
                     date = moment.localDate,
                     time = LocalTime.of(7, 5, 30),
                     zoneId = moment.zoneId,
+                ),
+        )
+    }
+
+    private fun dailyCreation(ownerIdentifier: MemberIdentifier): RecurringSeriesCreation {
+        val taskIdentifier = TaskIdentifier("task-${UUID.randomUUID()}")
+        val revisionIdentifier = SeriesRevisionIdentifier("revision-${UUID.randomUUID()}")
+        val moment =
+            MemberActionMoment(
+                instant = Instant.parse("2026-08-09T01:35:30.123Z"),
+                localDate = LocalDate.parse("2026-08-09"),
+                zoneId = ZoneId.of("Asia/Kolkata"),
+            )
+
+        return RecurringSeriesCreation(
+            series =
+                RecurringSeries(
+                    identifier = taskIdentifier,
+                    ownerIdentifier = ownerIdentifier,
+                    activeRevisionIdentifier = revisionIdentifier,
+                    visibility = TaskVisibility.Private,
+                    createdAt = moment,
+                ),
+            initialRevision =
+                SeriesRevision(
+                    identifier = revisionIdentifier,
+                    taskIdentifier = taskIdentifier,
+                    title = "Water the basil",
+                    subtaskTemplate =
+                        listOf(
+                            SubtaskTemplate(
+                                identifier = SubtaskIdentifier("subtask-soil"),
+                                label = "Check the soil",
+                            ),
+                        ),
+                    recurrenceRule = RecurrenceRule.Daily(everyDays = 1),
+                    startsOn = moment.localDate,
+                    endsOnInclusive = null,
+                    recordedAt = moment,
                 ),
         )
     }
