@@ -18,6 +18,7 @@ import com.gaylord.duit.feature.tasks.TasksEffect
 import com.gaylord.duit.feature.tasks.TasksViewModel
 import com.gaylord.duit.feature.today.TodayEffect
 import com.gaylord.duit.feature.today.TodayViewModel
+import com.gaylord.duit.feature.together.TogetherViewModel
 import com.gaylord.duit.platform.firebase.FirebaseRuntime
 import com.gaylord.duit.platform.firebase.FirebaseRuntimeFactory
 import com.gaylord.duit.platform.firebase.FirebaseSignInFailure
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var firebaseRuntime: FirebaseRuntime
     private lateinit var workspace: DuitWorkspace
     private lateinit var todayViewModel: TodayViewModel
+    private lateinit var togetherViewModel: TogetherViewModel
     private lateinit var tasksViewModel: TasksViewModel
     private var workspaceActionJob: Job? = null
 
@@ -46,6 +48,11 @@ class MainActivity : ComponentActivity() {
                 this,
                 TodayViewModel.Factory(workspace),
             )[TodayViewModel::class.java]
+        togetherViewModel =
+            ViewModelProvider(
+                this,
+                TogetherViewModel.Factory(workspace),
+            )[TogetherViewModel::class.java]
         tasksViewModel =
             ViewModelProvider(
                 this,
@@ -55,6 +62,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val accessState by workspace.accessState.collectAsStateWithLifecycle()
             val todayState by todayViewModel.state.collectAsStateWithLifecycle()
+            val togetherState by togetherViewModel.state.collectAsStateWithLifecycle()
             val tasksState by tasksViewModel.state.collectAsStateWithLifecycle()
 
             DuitApp(
@@ -62,6 +70,8 @@ class MainActivity : ComponentActivity() {
                 onAccessAction = ::handleAccessAction,
                 todayState = todayState,
                 onTodayEvent = todayViewModel::onEvent,
+                togetherState = togetherState,
+                onTogetherEvent = togetherViewModel::onEvent,
                 tasksState = tasksState,
                 onTasksEvent = tasksViewModel::onEvent,
             )

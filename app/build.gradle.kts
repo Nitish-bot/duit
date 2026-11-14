@@ -212,7 +212,9 @@ dependencies {
 
     add("devImplementation", platform(libs.firebase.bom))
     add("devImplementation", libs.firebase.auth)
+    add("devImplementation", libs.firebase.appcheck.debug)
     add("devImplementation", libs.firebase.firestore)
+    add("devImplementation", libs.firebase.functions)
     add("devImplementation", libs.androidx.credentials)
     add("devImplementation", libs.androidx.credentials.play.services.auth)
     add("devImplementation", libs.androidx.datastore.preferences)
@@ -224,6 +226,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -9,6 +9,11 @@ import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
 import com.gaylord.duit.domain.model.TaskIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
+import com.gaylord.duit.domain.pairing.PairInvite
+import com.gaylord.duit.domain.pairing.PairIdentifier
+import com.gaylord.duit.domain.pairing.PairingStatus
+import com.gaylord.duit.pairing.PairingCallResult
+import com.gaylord.duit.pairing.PairingGateway
 import com.gaylord.duit.notifications.ReminderGateway
 import com.gaylord.duit.notifications.ScheduledTaskReminder
 import java.time.Clock
@@ -31,6 +36,197 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DuitWorkspaceAccessTest {
+    @Test
+    fun `creating a Pair Invite rechecks Pairing status through the workspace seam`() =
+        runTest {
+            val invite = PairInvite("7K3M9P2Q", expiresAtEpochMillis = 1_786_406_100_000)
+            val pairing =
+                RecordingAccessPairingGateway(
+                    statusResults =
+                        ArrayDeque(
+                            listOf(PairingCallResult.Success(PairingStatus.Unpaired)),
+                        ),
+                    inviteResults = ArrayDeque(listOf(PairingCallResult.Success(invite))),
+                )
+            val workspace =
+                createAuthenticatedWorkspace(
+                    authentication = FakeAuthentication(AuthenticatedIdentity("member-alex")),
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    pairing = pairing,
+                )
+            workspace.restoreSession()
+
+            val outcome = workspace.execute(PairCommand.CreateInvite)
+
+            assertEquals(
+                PairCommandObservation(
+                    outcome = PairCommandOutcome.InviteCreated(invite),
+                    status = PairingStatus.Unpaired,
+                    calls = listOf("getPairingStatus", "createPairInvite"),
+                ),
+                PairCommandObservation(
+                    outcome = outcome,
+                    status = workspace.pairingStatus.value,
+                    calls = pairing.calls,
+                ),
+            )
+        }
+
+    @Test
+    fun `accepting a Pair Invite rechecks status and publishes Pending Confirmation`() =
+        runTest {
+            val pending =
+                PairingStatus.PendingConfirmation(
+                    pairIdentifier = PairIdentifier("pair-alex-sam"),
+                    partnerIdentity =
+                        com.gaylord.duit.domain.pairing.PartnerIdentity("Sam Rivera", null),
+                    selfConfirmed = false,
+                    partnerConfirmed = false,
+                )
+            val pairing =
+                RecordingAccessPairingGateway(
+                    statusResults =
+                        ArrayDeque(
+                            listOf(PairingCallResult.Success(PairingStatus.Unpaired)),
+                        ),
+                    acceptResults = ArrayDeque(listOf(PairingCallResult.Success(pending))),
+                )
+            val workspace =
+                createAuthenticatedWorkspace(
+                    authentication = FakeAuthentication(AuthenticatedIdentity("member-alex")),
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    pairing = pairing,
+                )
+            workspace.restoreSession()
+
+            val outcome = workspace.execute(PairCommand.AcceptInvite("7K3M9P2Q"))
+
+            assertEquals(PairCommandOutcome.StatusChanged(pending), outcome)
+            assertEquals(pending, workspace.pairingStatus.value)
+            assertEquals(
+                listOf("getPairingStatus", "acceptPairInvite:7K3M9P2Q"),
+                pairing.calls,
+            )
+        }
+
+    @Test
+    fun `Pairing result arriving after sign out cannot repopulate Member state`() =
+        runTest {
+            val pairing = DeferredStatusPairingGateway()
+            val authentication = FakeAuthentication(AuthenticatedIdentity("member-alex"))
+            val workspace =
+                createAuthenticatedWorkspace(
+                    authentication = authentication,
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    pairing = pairing,
+                )
+            workspace.restoreSession()
+
+            val refresh = async { workspace.execute(PairCommand.RefreshStatus) }
+            pairing.started.await()
+            workspace.signOut()
+            pairing.result.complete(
+                PairingCallResult.Success(
+                    PairingStatus.Active(
+                        PairIdentifier("pair-alex-sam"),
+                        com.gaylord.duit.domain.pairing.PartnerIdentity("Sam Rivera", null),
+                    ),
+                ),
+            )
+
+            assertEquals(PairCommandOutcome.MemberSessionChanged, refresh.await())
+            assertEquals(null, workspace.pairingStatus.value)
+            assertEquals(WorkspaceAccessState.SignInRequired, workspace.accessState.value)
+        }
+
+    @Test
+    fun `Pairing result resolving in the Ready-state sign-out gap is discarded`() =
+        runTest {
+            val activePairing =
+                PairingStatus.Active(
+                    PairIdentifier("pair-alex-sam"),
+                    com.gaylord.duit.domain.pairing.PartnerIdentity("Sam Rivera", null),
+                )
+            val pairing = DeferredStatusPairingGateway()
+            var accessStateAtResolution: WorkspaceAccessState? = null
+            lateinit var workspace: DuitWorkspace
+            val persistedSession =
+                ResolvePairingDuringSignOutPersistedSessionGateway(
+                    pairing = pairing,
+                    result = PairingCallResult.Success(activePairing),
+                    beforeResolvingPairing = {
+                        accessStateAtResolution = workspace.accessState.value
+                    },
+                )
+            workspace =
+                createAuthenticatedWorkspace(
+                    authentication = FakeAuthentication(AuthenticatedIdentity("member-alex")),
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    persistedSession = persistedSession,
+                    pairing = pairing,
+                )
+            workspace.restoreSession()
+
+            val refresh =
+                async(Dispatchers.Unconfined) {
+                    workspace.execute(PairCommand.RefreshStatus)
+                }
+            pairing.started.await()
+            val signOut = async { workspace.signOut() }
+            runCurrent()
+
+            assertEquals(PairCommandOutcome.MemberSessionChanged, refresh.await())
+            assertEquals(null, workspace.pairingStatus.value)
+            assertEquals(
+                WorkspaceAccessState.Ready(
+                    memberIdentifier = MemberIdentifier("member-alex"),
+                    restorationSource = WorkspaceRestorationSource.Server,
+                ),
+                accessStateAtResolution,
+            )
+
+            persistedSession.allowSignOutToFinish()
+            signOut.await()
+        }
+
+    @Test
+    fun `Pairing result from before sign out is discarded after the same Member signs in again`() =
+        runTest {
+            val pairing = DeferredStatusPairingGateway()
+            val authentication = FakeAuthentication(AuthenticatedIdentity("member-alex"))
+            val workspace =
+                createAuthenticatedWorkspace(
+                    authentication = authentication,
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    pairing = pairing,
+                )
+            workspace.restoreSession()
+
+            val refresh = async { workspace.execute(PairCommand.RefreshStatus) }
+            pairing.started.await()
+            workspace.signOut()
+            authentication.authenticate("member-alex")
+            workspace.restoreSession()
+            pairing.result.complete(
+                PairingCallResult.Success(
+                    PairingStatus.Active(
+                        PairIdentifier("pair-alex-sam"),
+                        com.gaylord.duit.domain.pairing.PartnerIdentity("Sam Rivera", null),
+                    ),
+                ),
+            )
+
+            assertEquals(PairCommandOutcome.MemberSessionChanged, refresh.await())
+            assertEquals(null, workspace.pairingStatus.value)
+            assertEquals(
+                WorkspaceAccessState.Ready(
+                    memberIdentifier = MemberIdentifier("member-alex"),
+                    restorationSource = WorkspaceRestorationSource.Server,
+                ),
+                workspace.accessState.value,
+            )
+        }
+
     @Test
     fun `signed-out identity sees sign in required and cannot execute Task commands`() =
         runTest {
@@ -153,6 +349,62 @@ class DuitWorkspaceAccessTest {
                     tasksAtUnlock = tasksAfterHydration,
                     createdTaskIdentifier = createdTaskIdentifier,
                 ),
+            )
+        }
+
+    @Test
+    fun `offline Pairing attempt requires a connection without disturbing the hydrated Owner workspace`() =
+        runTest {
+            val memberIdentifier = MemberIdentifier("member-alex")
+            val pairing =
+                RecordingAccessPairingGateway(
+                    statusResults =
+                        ArrayDeque(
+                            listOf(
+                                PairingCallResult.Failure(
+                                    com.gaylord.duit.pairing.PairingCallFailure.ConnectionRequired,
+                                ),
+                            ),
+                        ),
+                )
+            val workspace =
+                createAuthenticatedWorkspace(
+                    authentication = FakeAuthentication(AuthenticatedIdentity("member-alex")),
+                    approval = MemberApprovalGateway { MemberApproval.Approved },
+                    pairing = pairing,
+                )
+            workspace.restoreSession()
+            workspace.execute(
+                MemberCommand.AddPrivateDailyTaskToToday(
+                    commandIdentifier = CommandIdentifier("before-pairing"),
+                    title = "Water the herbs",
+                ),
+            )
+
+            val outcome = workspace.execute(PairCommand.CreateInvite)
+            workspace.execute(
+                MemberCommand.AddPrivateDailyTaskToToday(
+                    commandIdentifier = CommandIdentifier("after-pairing"),
+                    title = "Stretch",
+                ),
+            )
+
+            assertEquals(
+                PairCommandOutcome.Failed(PairCommandFailure.ConnectionRequired),
+                outcome,
+            )
+            assertEquals(listOf("getPairingStatus"), pairing.calls)
+            assertEquals(null, workspace.pairingStatus.value)
+            assertEquals(
+                WorkspaceAccessState.Ready(
+                    memberIdentifier = memberIdentifier,
+                    restorationSource = WorkspaceRestorationSource.Server,
+                ),
+                workspace.accessState.value,
+            )
+            assertEquals(
+                listOf("Water the herbs", "Stretch"),
+                workspace.observePersonalAgenda().first().tasks.map(AgendaTask::title),
             )
         }
 
@@ -915,6 +1167,12 @@ private data class ApprovalFailureObservation(
     val stateAfterRetry: WorkspaceAccessState,
 )
 
+private data class PairCommandObservation(
+    val outcome: PairCommandOutcome,
+    val status: PairingStatus?,
+    val calls: List<String>,
+)
+
 private suspend fun DuitWorkspace.executeAndObserveRejection(): WorkspaceAccessState {
     try {
         execute(
@@ -938,6 +1196,7 @@ private fun createAuthenticatedWorkspace(
         OwnerWorkspaceHydrationGateway { OwnerWorkspaceHydration.Complete },
     persistedSession: PersistedWorkspaceSessionGateway = InMemoryPersistedWorkspaceSessionGateway(),
     persistence: TaskRepository = AccessTestTaskRepository(),
+    pairing: PairingGateway? = null,
     sessionOperations: WorkspaceSessionOperationCoordinator =
         WorkspaceSessionOperationCoordinator(
             CoroutineScope(Dispatchers.Unconfined),
@@ -959,12 +1218,97 @@ private fun createAuthenticatedWorkspace(
         },
         persistence = persistence,
         reminders = AccessTestReminderGateway,
+        pairing = pairing,
         authentication = authentication,
         approval = approval,
         hydration = hydration,
         persistedSession = persistedSession,
         sessionOperations = sessionOperations,
     )
+
+private class RecordingAccessPairingGateway(
+    private val statusResults: ArrayDeque<PairingCallResult<PairingStatus>> = ArrayDeque(),
+    private val inviteResults: ArrayDeque<PairingCallResult<PairInvite>> = ArrayDeque(),
+    private val acceptResults:
+        ArrayDeque<PairingCallResult<PairingStatus.PendingConfirmation>> = ArrayDeque(),
+) : PairingGateway {
+    val calls = mutableListOf<String>()
+
+    override suspend fun getPairingStatus(): PairingCallResult<PairingStatus> {
+        calls += "getPairingStatus"
+        return statusResults.removeFirst()
+    }
+
+    override suspend fun createPairInvite(): PairingCallResult<PairInvite> {
+        calls += "createPairInvite"
+        return inviteResults.removeFirst()
+    }
+
+    override suspend fun acceptPairInvite(
+        code: String,
+    ): PairingCallResult<PairingStatus.PendingConfirmation> {
+        calls += "acceptPairInvite:$code"
+        return acceptResults.removeFirst()
+    }
+
+    override suspend fun confirmPair(
+        pairIdentifier: PairIdentifier,
+    ): PairingCallResult<PairingStatus> = error("Not used")
+}
+
+private class DeferredStatusPairingGateway : PairingGateway {
+    val started = CompletableDeferred<Unit>()
+    val result = CompletableDeferred<PairingCallResult<PairingStatus>>()
+
+    override suspend fun getPairingStatus(): PairingCallResult<PairingStatus> {
+        started.complete(Unit)
+        return result.await()
+    }
+
+    override suspend fun createPairInvite(): PairingCallResult<PairInvite> = error("Not used")
+
+    override suspend fun acceptPairInvite(
+        code: String,
+    ): PairingCallResult<PairingStatus.PendingConfirmation> = error("Not used")
+
+    override suspend fun confirmPair(
+        pairIdentifier: PairIdentifier,
+    ): PairingCallResult<PairingStatus> = error("Not used")
+}
+
+private class ResolvePairingDuringSignOutPersistedSessionGateway(
+    private val pairing: DeferredStatusPairingGateway,
+    private val result: PairingCallResult<PairingStatus>,
+    private val beforeResolvingPairing: () -> Unit,
+) : PersistedWorkspaceSessionGateway {
+    private val finishSignOut = CompletableDeferred<Unit>()
+    private var hydrated = false
+    private var pendingSignOut: MemberIdentifier? = null
+
+    override suspend fun wasHydrated(memberIdentifier: MemberIdentifier): Boolean = hydrated
+
+    override suspend fun recordHydrated(memberIdentifier: MemberIdentifier) {
+        hydrated = true
+    }
+
+    override suspend fun pendingSignOut(): MemberIdentifier? = pendingSignOut
+
+    override suspend fun beginSignOut(memberIdentifier: MemberIdentifier) {
+        beforeResolvingPairing()
+        pairing.result.complete(result)
+        pendingSignOut = memberIdentifier
+        finishSignOut.await()
+        hydrated = false
+    }
+
+    override suspend fun completeSignOut(memberIdentifier: MemberIdentifier) {
+        pendingSignOut = null
+    }
+
+    fun allowSignOutToFinish() {
+        finishSignOut.complete(Unit)
+    }
+}
 
 private class FakeAuthentication(
     private var identity: AuthenticatedIdentity? = null,

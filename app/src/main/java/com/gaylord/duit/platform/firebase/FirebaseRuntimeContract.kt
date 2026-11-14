@@ -4,6 +4,7 @@ import android.app.Activity
 import com.gaylord.duit.data.repository.TaskRepository
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.notifications.ReminderGateway
+import com.gaylord.duit.pairing.PairingGateway
 import com.gaylord.duit.workspace.AuthenticatedIdentity
 import com.gaylord.duit.workspace.AuthenticationGateway
 import com.gaylord.duit.workspace.AuthenticationSignOut
@@ -51,6 +52,7 @@ enum class FirebaseSignInFailure {
 data class FirebaseWorkspaceServices(
     val tasks: TaskRepository,
     val reminders: ReminderGateway?,
+    val pairing: PairingGateway,
 )
 
 interface FirebaseRuntime {

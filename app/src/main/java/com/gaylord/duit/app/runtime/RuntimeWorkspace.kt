@@ -49,6 +49,7 @@ private fun buildRuntimeWorkspace(firebaseRuntime: FirebaseRuntime): DuitWorkspa
             },
         persistence = workspaceServices?.tasks,
         reminders = workspaceServices?.reminders,
+        pairing = workspaceServices?.pairing,
         authentication = firebaseRuntime.authentication,
         approval = firebaseRuntime.approval,
         hydration = firebaseRuntime.hydration,

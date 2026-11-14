@@ -7,6 +7,7 @@
       "ignore": [
         "node_modules",
         "emulator",
+        "development",
         ".git",
         "firebase-debug.log",
         "firebase-debug.*.log",

@@ -107,6 +107,37 @@ Production Firebase is deliberately not required during development. Use a separ
 
 Repeat steps 6–9 for any additional development Member. Approving another UID requires no app, Rules, or Functions redeployment. Pairing remains optional; each approved Member owns a private workspace whether paired or not.
 
+## Development Functions and App Check
+
+The Pairing callables have a separate development-only deployment boundary. `firebase.development.json` packages the `development-only` codebase from `functions/development`; the default production Functions entry stays empty, and the local emulator keeps App Check disabled. Never substitute `firebase.json` in the command below or target a production project.
+
+Cloud Functions deployment requires the development Firebase project to use the Blaze plan. Before deploying, configure the App Check debug provider only in the `dev` flavor and register the specific development installation:
+
+1. Build and run `devDebug`, then open Together so the app requests an App Check token. Find the token in the device logs:
+
+   ```sh
+   adb logcat -s DebugAppCheckProvider
+   ```
+
+2. In Firebase Console, open **Security → App Check → Apps**, find `com.gaylord.duit.dev`, choose **Manage debug tokens**, and register the logged token. Follow [Firebase's Android debug-provider instructions](https://firebase.google.com/docs/app-check/android/debug-provider). Keep the token and debug build private, never commit the token, and revoke it immediately if it is exposed.
+3. Verify the isolated deployment package locally:
+
+   ```sh
+   npm --prefix functions run typecheck
+   npm --prefix functions run test:boundaries
+   ```
+
+4. While signed in to the Firebase CLI with an account that owns only the development project, deploy only the development codebase. Replace the placeholder with the project ID from the development `google-services.json` or Firebase Console:
+
+   ```sh
+   ./functions/node_modules/.bin/firebase deploy \
+     --config firebase.development.json \
+     --only functions:development-only \
+     --project <development-project-id>
+   ```
+
+The four deployed Pairing callables reject missing or invalid App Check tokens. Firebase's callable client attaches a registered debug token automatically; see [callable Functions enforcement](https://firebase.google.com/docs/app-check/cloud-functions). A new development installation may produce a different token that must be registered before Pairing acceptance tests. This workflow does not deploy production Functions or change the production entry point.
+
 ## Functions and Firebase Emulator Suite
 
 Type-check the Functions package:

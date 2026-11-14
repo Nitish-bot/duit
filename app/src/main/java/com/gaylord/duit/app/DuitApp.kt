@@ -68,6 +68,8 @@ import com.gaylord.duit.feature.today.TodayScreen
 import com.gaylord.duit.feature.today.TodayEventHandler
 import com.gaylord.duit.feature.today.TodayUiState
 import com.gaylord.duit.feature.together.TogetherScreen
+import com.gaylord.duit.feature.together.TogetherEvent
+import com.gaylord.duit.feature.together.TogetherState
 import com.gaylord.duit.workspace.WorkspaceAccessAction
 import com.gaylord.duit.workspace.WorkspaceAccessState
 import com.gaylord.duit.workspace.WorkspaceRestorationSource
@@ -79,6 +81,8 @@ fun DuitApp(
     onAccessAction: (WorkspaceAccessAction) -> Unit = {},
     todayState: TodayUiState = TodayUiState(),
     onTodayEvent: TodayEventHandler = {},
+    togetherState: TogetherState = TogetherState.Loading,
+    onTogetherEvent: (TogetherEvent) -> Unit = {},
     tasksState: TasksUiState = TasksUiState(),
     onTasksEvent: TasksEventHandler = {},
 ) {
@@ -87,6 +91,8 @@ fun DuitApp(
             is WorkspaceAccessState.Ready -> DuitShell(
                 todayState = todayState,
                 onTodayEvent = onTodayEvent,
+                togetherState = togetherState,
+                onTogetherEvent = onTogetherEvent,
                 tasksState = tasksState,
                 onTasksEvent = onTasksEvent,
             )
@@ -309,6 +315,8 @@ private fun DuitShell(
     navController: NavHostController = rememberNavController(),
     todayState: TodayUiState = TodayUiState(),
     onTodayEvent: TodayEventHandler = {},
+    togetherState: TogetherState = TogetherState.Loading,
+    onTogetherEvent: (TogetherEvent) -> Unit = {},
     tasksState: TasksUiState = TasksUiState(),
     onTasksEvent: TasksEventHandler = {},
 ) {
@@ -368,7 +376,12 @@ private fun DuitShell(
                     onEvent = onTodayEvent,
                 )
             }
-            composable(DuitDestination.Together.route) { TogetherScreen() }
+            composable(DuitDestination.Together.route) {
+                TogetherScreen(
+                    state = togetherState,
+                    onEvent = onTogetherEvent,
+                )
+            }
             composable(DuitDestination.Plan.route) { PlanScreen() }
             composable(DuitDestination.Tasks.route) {
                 TasksScreen(

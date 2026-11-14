@@ -29,6 +29,7 @@ test("production and emulator configurations use distinct Functions sources", as
 
   assert.equal(productionFunctions?.source, "functions");
   assert.ok(productionFunctions?.ignore?.includes("emulator"));
+  assert.ok(productionFunctions?.ignore?.includes("development"));
   assert.equal(emulatorFunctions?.source, "functions/emulator");
 });
 

@@ -1,6 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 
 import { getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import {
   type DocumentData,
   type DocumentReference,
@@ -97,7 +98,7 @@ async function confirmPair(
   PairingStatusResult & { partnerConfirmed: boolean; selfConfirmed: boolean }
 > {
   const pairId = requirePairIdData(request.data);
-  const authenticatedIdentity = requireAuthenticatedGoogleIdentity(request);
+  const authenticatedIdentity = await requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const now = Timestamp.now();
 
@@ -213,7 +214,7 @@ async function getPairingStatus(
   request: CallableRequest<unknown>,
 ): Promise<GetPairingStatusResult> {
   requireEmptyObject(request.data);
-  const authenticatedIdentity = requireAuthenticatedGoogleIdentity(request);
+  const authenticatedIdentity = await requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const now = Timestamp.now();
   return database.runTransaction(async (transaction) => {
@@ -303,7 +304,7 @@ async function getPairingStatus(
 async function acceptPairInvite(
   request: CallableRequest<unknown>,
 ): Promise<PairingStatusResult> {
-  const acceptingIdentity = requireAuthenticatedGoogleIdentity(request);
+  const acceptingIdentity = await requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const normalizedCode = normalizeInviteCode(extractPairInviteCode(request.data));
   const inviteDocumentId =
@@ -438,7 +439,7 @@ async function createPairInvite(
   request: CallableRequest<unknown>,
 ): Promise<CreatePairInviteResult> {
   requireEmptyObject(request.data);
-  const authenticatedIdentity = requireAuthenticatedGoogleIdentity(request);
+  const authenticatedIdentity = await requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
   const code = generateInviteCode();
   const inviteHash = hashInviteCode(code);
@@ -491,9 +492,9 @@ async function createPairInvite(
   };
 }
 
-function requireAuthenticatedGoogleIdentity(
+async function requireAuthenticatedGoogleIdentity(
   request: CallableRequest<unknown>,
-): AuthenticatedGoogleIdentity {
+): Promise<AuthenticatedGoogleIdentity> {
   if (request.auth === undefined) {
     throw new HttpsError("unauthenticated", "Sign in to use Pairing.");
   }
@@ -510,7 +511,20 @@ function requireAuthenticatedGoogleIdentity(
     );
   }
 
-  const displayName = normalizedIdentityField(request.auth.token.name);
+  // Token claims `name` and `picture` are editable by the Member through
+  // updateProfile, so the Partner identity comes from the Google provider entry.
+  const userRecord = await getAuth(adminApp()).getUser(request.auth.uid);
+  const googleProvider = userRecord.providerData.find(
+    (provider) => provider.providerId === "google.com",
+  );
+  if (googleProvider === undefined) {
+    throw new HttpsError(
+      "permission-denied",
+      "Pairing requires a Google-authenticated identity.",
+    );
+  }
+
+  const displayName = normalizedIdentityField(googleProvider.displayName);
   if (displayName === null) {
     throw new HttpsError(
       "failed-precondition",
@@ -522,7 +536,7 @@ function requireAuthenticatedGoogleIdentity(
     uid: request.auth.uid,
     displayIdentity: {
       displayName,
-      photoUrl: normalizedIdentityField(request.auth.token.picture),
+      photoUrl: googlePhotoUrl(googleProvider.photoURL),
     },
   };
 }
@@ -746,6 +760,22 @@ function membershipLock(pairId: string, partnerUid: string, now: Timestamp) {
   };
 }
 
+function googlePhotoUrl(value: unknown): string | null {
+  const candidate = normalizedIdentityField(value);
+  if (candidate === null) {
+    return null;
+  }
+  try {
+    const url = new URL(candidate);
+    const host = url.hostname.toLowerCase();
+    const isGoogleHost =
+      host === "googleusercontent.com" || host.endsWith(".googleusercontent.com");
+    return url.protocol === "https:" && isGoogleHost ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizedIdentityField(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -835,9 +865,10 @@ function asNonNegativeInteger(value: unknown): number {
     : 0;
 }
 
+function adminApp() {
+  return getApps().length === 0 ? initializeApp() : getApps()[0];
+}
+
 function pairingDatabase() {
-  if (getApps().length === 0) {
-    initializeApp();
-  }
-  return getFirestore();
+  return getFirestore(adminApp());
 }

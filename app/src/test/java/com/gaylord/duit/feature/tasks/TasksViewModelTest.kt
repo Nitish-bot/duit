@@ -302,6 +302,7 @@ private fun createAuthenticatedTasksWorkspace(
             },
         persistence = repository,
         reminders = TasksTestReminderGateway,
+        pairing = null,
         authentication = authentication,
         approval = MemberApprovalGateway { MemberApproval.Approved },
         hydration = OwnerWorkspaceHydrationGateway { OwnerWorkspaceHydration.Complete },

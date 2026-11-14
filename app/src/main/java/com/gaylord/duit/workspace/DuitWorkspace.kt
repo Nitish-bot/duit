@@ -24,9 +24,15 @@ import com.gaylord.duit.domain.model.TaskReminderConfiguration
 import com.gaylord.duit.domain.model.TaskRevision
 import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
+import com.gaylord.duit.domain.pairing.PairInvite
+import com.gaylord.duit.domain.pairing.PairIdentifier
+import com.gaylord.duit.domain.pairing.PairingStatus
 import com.gaylord.duit.domain.recurrence.RecurrenceEngine
 import com.gaylord.duit.notifications.ReminderGateway
 import com.gaylord.duit.notifications.ScheduledTaskReminder
+import com.gaylord.duit.pairing.PairingCallFailure
+import com.gaylord.duit.pairing.PairingCallResult
+import com.gaylord.duit.pairing.PairingGateway
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDate
@@ -37,7 +43,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -46,6 +54,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DuitWorkspace private constructor(
@@ -54,6 +64,7 @@ class DuitWorkspace private constructor(
     private val taskIdentities: TaskIdentityGenerator,
     private val persistence: TaskRepository?,
     private val reminders: ReminderGateway?,
+    private val pairing: PairingGateway?,
     private val accessController: WorkspaceAccessController,
     private val memberDates: Flow<LocalDate>,
 ) {
@@ -64,29 +75,249 @@ class DuitWorkspace private constructor(
         taskIdentities: TaskIdentityGenerator,
         persistence: TaskRepository,
         reminders: ReminderGateway,
+        pairing: PairingGateway? = null,
     ) : this(
         clock = clock,
         zoneProvider = zoneProvider,
         taskIdentities = taskIdentities,
         persistence = persistence,
         reminders = reminders,
+        pairing = pairing,
         accessController = ReadyWorkspaceAccessController(memberIdentifier),
         memberDates = observeMemberDates(clock, zoneProvider),
     )
 
+    private data class PairingSession(
+        val memberIdentifier: MemberIdentifier,
+        val generation: Long,
+    )
+
+    private val pairCommandMutex = Mutex()
+    private val pairingStateLock = Any()
+    private val mutablePairingStatus = MutableStateFlow<PairingStatus?>(null)
+    private var pairingSessionGeneration = 0L
+    private var pairingSignOutDepth = 0
+    private var pairingMemberIdentifier: MemberIdentifier? =
+        (accessController.state.value as? WorkspaceAccessState.Ready)?.memberIdentifier
+
     val accessState: StateFlow<WorkspaceAccessState> = accessController.state
+    val pairingStatus: StateFlow<PairingStatus?> = mutablePairingStatus.asStateFlow()
 
     suspend fun restoreSession() {
         accessController.restoreSession()
+        resetPairingWhenMemberChanges()
     }
 
     suspend fun retryAccess() {
         accessController.retryAccess()
+        resetPairingWhenMemberChanges()
     }
 
     suspend fun signOut() {
-        accessController.signOut()
+        beginPairingSignOut()
+        try {
+            accessController.signOut()
+        } finally {
+            finishPairingSignOut()
+        }
     }
+
+    suspend fun execute(command: PairCommand): PairCommandOutcome {
+        val memberIdentifier = requireReadyMemberIdentifier()
+        val session =
+            pairingSessionFor(memberIdentifier)
+                ?: return PairCommandOutcome.MemberSessionChanged
+
+        return pairCommandMutex.withLock {
+            if (!isCurrentPairingSession(session)) {
+                return@withLock PairCommandOutcome.MemberSessionChanged
+            }
+
+            val gateway = pairing
+            val outcome =
+                if (gateway == null) {
+                    PairCommandOutcome.Failed(PairCommandFailure.ConnectionRequired)
+                } else {
+                    when (command) {
+                        PairCommand.RefreshStatus -> refreshPairingStatus(session, gateway)
+                        PairCommand.CreateInvite -> createPairInvite(session, gateway)
+                        is PairCommand.AcceptInvite ->
+                            acceptPairInvite(session, gateway, command.code)
+                        is PairCommand.ConfirmPair ->
+                            confirmPair(session, gateway, command.pairIdentifier)
+                    }
+                }
+            finishPairCommand(session, outcome)
+        }
+    }
+
+    private suspend fun refreshPairingStatus(
+        session: PairingSession,
+        gateway: PairingGateway,
+    ): PairCommandOutcome =
+        when (val result = gateway.getPairingStatus()) {
+            is PairingCallResult.Failure -> result.failure.toPairCommandOutcome(session)
+            is PairingCallResult.Success ->
+                publishPairingStatus(session, result.value)
+                    ?: PairCommandOutcome.StatusChanged(result.value)
+        }
+
+    private suspend fun createPairInvite(
+        session: PairingSession,
+        gateway: PairingGateway,
+    ): PairCommandOutcome =
+        when (val status = gateway.getPairingStatus()) {
+            is PairingCallResult.Failure -> status.failure.toPairCommandOutcome(session)
+            is PairingCallResult.Success -> {
+                val sessionChanged = publishPairingStatus(session, status.value)
+                if (sessionChanged != null) {
+                    sessionChanged
+                } else if (status.value != PairingStatus.Unpaired) {
+                    PairCommandOutcome.StatusChanged(status.value)
+                } else if (!isCurrentPairingSession(session)) {
+                    PairCommandOutcome.MemberSessionChanged
+                } else {
+                    when (val invite = gateway.createPairInvite()) {
+                        is PairingCallResult.Failure ->
+                            invite.failure.toPairCommandOutcome(session)
+                        is PairingCallResult.Success ->
+                            if (isCurrentPairingSession(session)) {
+                                PairCommandOutcome.InviteCreated(invite.value)
+                            } else {
+                                PairCommandOutcome.MemberSessionChanged
+                            }
+                    }
+                }
+            }
+        }
+
+    private suspend fun acceptPairInvite(
+        session: PairingSession,
+        gateway: PairingGateway,
+        code: String,
+    ): PairCommandOutcome {
+        require(code.isNotBlank()) { "Pair Invite code must not be blank" }
+        return when (val status = gateway.getPairingStatus()) {
+            is PairingCallResult.Failure -> status.failure.toPairCommandOutcome(session)
+            is PairingCallResult.Success -> {
+                val sessionChanged = publishPairingStatus(session, status.value)
+                if (sessionChanged != null) {
+                    sessionChanged
+                } else if (status.value != PairingStatus.Unpaired) {
+                    PairCommandOutcome.StatusChanged(status.value)
+                } else if (!isCurrentPairingSession(session)) {
+                    PairCommandOutcome.MemberSessionChanged
+                } else {
+                    when (val acceptance = gateway.acceptPairInvite(code)) {
+                        is PairingCallResult.Failure ->
+                            acceptance.failure.toPairCommandOutcome(session)
+                        is PairingCallResult.Success ->
+                            publishPairingStatus(session, acceptance.value)
+                                ?: PairCommandOutcome.StatusChanged(acceptance.value)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun confirmPair(
+        session: PairingSession,
+        gateway: PairingGateway,
+        pairIdentifier: PairIdentifier,
+    ): PairCommandOutcome {
+        if (!isCurrentPairingSession(session)) return PairCommandOutcome.MemberSessionChanged
+        return when (val result = gateway.confirmPair(pairIdentifier)) {
+            is PairingCallResult.Failure -> result.failure.toPairCommandOutcome(session)
+            is PairingCallResult.Success ->
+                publishPairingStatus(session, result.value)
+                    ?: PairCommandOutcome.StatusChanged(result.value)
+        }
+    }
+
+    private fun publishPairingStatus(
+        session: PairingSession,
+        status: PairingStatus,
+    ): PairCommandOutcome.MemberSessionChanged? =
+        synchronized(pairingStateLock) {
+            if (!isCurrentPairingSessionLocked(session)) {
+                PairCommandOutcome.MemberSessionChanged
+            } else {
+                mutablePairingStatus.value = status
+                null
+            }
+        }
+
+    private fun resetPairingWhenMemberChanges() {
+        val memberIdentifier = readyMemberIdentifierOrNull()
+        synchronized(pairingStateLock) {
+            if (pairingSignOutDepth > 0 || memberIdentifier == pairingMemberIdentifier) return
+            pairingSessionGeneration += 1
+            pairingMemberIdentifier = memberIdentifier
+            mutablePairingStatus.value = null
+        }
+    }
+
+    private fun beginPairingSignOut() {
+        synchronized(pairingStateLock) {
+            pairingSignOutDepth += 1
+            pairingSessionGeneration += 1
+            pairingMemberIdentifier = null
+            mutablePairingStatus.value = null
+        }
+    }
+
+    private fun finishPairingSignOut() {
+        synchronized(pairingStateLock) {
+            check(pairingSignOutDepth > 0)
+            pairingSignOutDepth -= 1
+        }
+    }
+
+    private fun pairingSessionFor(memberIdentifier: MemberIdentifier): PairingSession? =
+        synchronized(pairingStateLock) {
+            if (
+                pairingSignOutDepth > 0 ||
+                    pairingMemberIdentifier != memberIdentifier ||
+                    readyMemberIdentifierOrNull() != memberIdentifier
+            ) {
+                null
+            } else {
+                PairingSession(memberIdentifier, pairingSessionGeneration)
+            }
+        }
+
+    private fun isCurrentPairingSession(session: PairingSession): Boolean =
+        synchronized(pairingStateLock) { isCurrentPairingSessionLocked(session) }
+
+    private fun isCurrentPairingSessionLocked(session: PairingSession): Boolean =
+        pairingSignOutDepth == 0 &&
+            pairingSessionGeneration == session.generation &&
+            pairingMemberIdentifier == session.memberIdentifier &&
+            readyMemberIdentifierOrNull() == session.memberIdentifier
+
+    private fun finishPairCommand(
+        session: PairingSession,
+        outcome: PairCommandOutcome,
+    ): PairCommandOutcome =
+        synchronized(pairingStateLock) {
+            if (isCurrentPairingSessionLocked(session)) {
+                outcome
+            } else {
+                PairCommandOutcome.MemberSessionChanged
+            }
+        }
+
+    private fun PairingCallFailure.toPairCommandOutcome(
+        session: PairingSession,
+    ): PairCommandOutcome =
+        if (isCurrentPairingSession(session)) {
+            PairCommandOutcome.Failed(toPairCommandFailure())
+        } else {
+            PairCommandOutcome.MemberSessionChanged
+        }
+
+    private fun readyMemberIdentifierOrNull(): MemberIdentifier? =
+        (accessState.value as? WorkspaceAccessState.Ready)?.memberIdentifier
 
     fun observePersonalAgenda(): Flow<PersonalAgenda> =
         combine(
@@ -667,6 +898,7 @@ class DuitWorkspace private constructor(
             taskIdentities: TaskIdentityGenerator,
             persistence: TaskRepository?,
             reminders: ReminderGateway?,
+            pairing: PairingGateway?,
             authentication: AuthenticationGateway,
             approval: MemberApprovalGateway,
             hydration: OwnerWorkspaceHydrationGateway,
@@ -679,6 +911,7 @@ class DuitWorkspace private constructor(
                 taskIdentities = taskIdentities,
                 persistence = persistence,
                 reminders = reminders,
+                pairing = pairing,
                 accessController =
                     AuthenticatedWorkspaceAccessController(
                         authentication = authentication,
@@ -771,6 +1004,44 @@ sealed interface MemberCommandOutcome {
         override val taskIdentifier: TaskIdentifier,
         val applied: Boolean,
     ) : MemberCommandOutcome
+}
+
+sealed interface PairCommand {
+    data object RefreshStatus : PairCommand
+
+    data object CreateInvite : PairCommand
+
+    data class AcceptInvite(
+        val code: String,
+    ) : PairCommand
+
+    data class ConfirmPair(
+        val pairIdentifier: PairIdentifier,
+    ) : PairCommand
+}
+
+sealed interface PairCommandOutcome {
+    data class StatusChanged(
+        val status: PairingStatus,
+    ) : PairCommandOutcome
+
+    data class InviteCreated(
+        val invite: PairInvite,
+    ) : PairCommandOutcome
+
+    data class Failed(
+        val failure: PairCommandFailure,
+    ) : PairCommandOutcome
+
+    data object MemberSessionChanged : PairCommandOutcome
+}
+
+sealed interface PairCommandFailure {
+    data object ConnectionRequired : PairCommandFailure
+
+    data class Recoverable(
+        val message: String?,
+    ) : PairCommandFailure
 }
 
 data class InitialTaskIdentifiers(
@@ -1069,3 +1340,9 @@ private fun TaskReminderConfiguration.toScheduledReminder(): ScheduledTaskRemind
         zoneId = zoneId,
         triggerAt = LocalDateTime.of(date, time).atZone(zoneId).toInstant(),
     )
+
+private fun PairingCallFailure.toPairCommandFailure(): PairCommandFailure =
+    when (this) {
+        PairingCallFailure.ConnectionRequired -> PairCommandFailure.ConnectionRequired
+        is PairingCallFailure.Recoverable -> PairCommandFailure.Recoverable(message)
+    }

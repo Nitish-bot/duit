@@ -567,7 +567,41 @@ test("two independent Pairs can activate concurrently without membership crossin
   );
 });
 
-async function createGoogleIdentity(displayName) {
+test("a Partner sees the Google identity even when the Member edits profile claims", async () => {
+  const googlePhoto = "https://lh3.googleusercontent.com/a/alice";
+  const alice = await createGoogleIdentity("Alice Example", googlePhoto);
+  const bob = await createGoogleIdentity("Bob Example");
+  await Promise.all([approve(alice.uid), approve(bob.uid)]);
+
+  await updateProfile(alice.user, {
+    displayName: "Mallory Edited",
+    photoURL: "https://evil.example/tracker.png",
+  });
+  await alice.user.getIdToken(true);
+  const invite = await call(alice, "createPairInvite", {});
+  const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
+
+  assert.equal(accepted.partnerIdentity.displayName, "Alice Example");
+  assert.equal(accepted.partnerIdentity.photoUrl, googlePhoto);
+});
+
+test("a non-Google photo is never returned as Partner identity", async () => {
+  const alice = await createGoogleIdentity(
+    "Alice Example",
+    "https://evil.example/tracker.png",
+  );
+  const bob = await createGoogleIdentity("Bob Example");
+  await Promise.all([approve(alice.uid), approve(bob.uid)]);
+  const invite = await call(alice, "createPairInvite", {});
+  const accepted = await call(bob, "acceptPairInvite", { code: invite.code });
+
+  assert.deepEqual(accepted.partnerIdentity, {
+    displayName: "Alice Example",
+    photoUrl: null,
+  });
+});
+
+async function createGoogleIdentity(displayName, picture = undefined) {
   identitySequence += 1;
   const app = initializeApp(
     {
@@ -588,6 +622,7 @@ async function createGoogleIdentity(displayName) {
         email: `member-${identitySequence}@example.test`,
         email_verified: true,
         name: displayName,
+        ...(picture === undefined ? {} : { picture }),
         sub: `google-member-${identitySequence}`,
       }),
     ),
@@ -601,6 +636,7 @@ async function createGoogleIdentity(displayName) {
     app,
     functions,
     uid: credential.user.uid,
+    user: credential.user,
   };
 }
 

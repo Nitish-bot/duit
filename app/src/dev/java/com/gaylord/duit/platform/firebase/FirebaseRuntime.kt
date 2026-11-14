@@ -10,7 +10,10 @@ import com.gaylord.duit.workspace.OwnerWorkspaceHydrationGateway
 import com.gaylord.duit.workspace.PersistedWorkspaceSessionGateway
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.functions.FirebaseFunctions
 
 object FirebaseRuntimeFactory {
     @Volatile
@@ -36,6 +39,8 @@ object FirebaseRuntimeFactory {
                 firebaseOptions(),
                 DevelopmentFirebaseAppName,
             )
+        FirebaseAppCheck.getInstance(firebaseApp)
+            .installAppCheckProviderFactory(DebugAppCheckProviderFactory.getInstance())
         val auth = FirebaseAuth.getInstance(firebaseApp)
         val firestoreSession = FirebaseFirestoreSession(firebaseApp)
         val credentialManager = CredentialManager.create(context)
@@ -56,6 +61,10 @@ object FirebaseRuntimeFactory {
                 FirebaseWorkspaceServices(
                     tasks = FirestoreTaskRepository(firestoreSession::current),
                     reminders = null,
+                    pairing =
+                        FirebaseFunctionsPairingGateway(
+                            FirebaseFunctions.getInstance(firebaseApp, PairingFunctionsRegion),
+                        ),
                 ),
         )
     }

@@ -7,11 +7,12 @@
     "node": "22"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json && tsc --project emulator/tsconfig.json",
+    "build": "tsc --project tsconfig.json && npm run build:development && tsc --project emulator/tsconfig.json",
+    "build:development": "tsc --project development/tsconfig.json",
     "test": "npm run test:boundaries && npm run test:emulator",
-    "test:boundaries": "npm run build && node --test test/production-boundary.test.mjs",
+    "test:boundaries": "npm run build && node --test test/production-boundary.test.mjs test/development-boundary.test.mjs",
     "test:android-repository": "node test/run-firestore-android-repository.mjs",
-    "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project emulator/tsconfig.json --noEmit",
+    "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project development/tsconfig.json --noEmit && tsc --project emulator/tsconfig.json --noEmit",
     "test:smoke": "node --test --test-concurrency=1 test/emulator-smoke.test.mjs test/firestore-access.test.mjs test/pairing-functions.test.mjs",
     "test:emulator": "npm run build && firebase emulators:exec --config ../firebase.emulator.json --project demo-duit --only auth,functions,firestore \"npm run test:smoke\"",
     "emulators:start": "npm run build && firebase emulators:start --config ../firebase.emulator.json --project demo-duit --only auth,functions,firestore"
