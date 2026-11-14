@@ -1,6 +1,6 @@
 # Duit implementation handoff
 
-Snapshot date: 2026-11-14 (Asia/Kolkata)
+Snapshot date: 2026-11-15 (Asia/Kolkata)
 
 This document is for a fresh implementation chat continuing the GitHub issue backlog. Verify the snapshot commands below before editing because GitHub Issues remain the specification and dependency source of truth.
 
@@ -19,13 +19,17 @@ The user does not currently need to verify anything before work resumes. Stop fo
 - Repository: `Nitish-bot/duit`
 - Workspace: use the repository root supplied by the current Codex task.
 - Branch: `main`
-- Implementation baseline: `6a8cbe5d8580a19cad581225ac42d98bcc136ab5`
+- Implementation baseline: `273fb2ed08dcf96e297d0c3c41c18c3e0bf2179f`
 - The implementation worktree was clean at the baseline above. This handoff refresh is the intended subsequent documentation commit.
 - `main` says `[origin/main: gone]`; do not assume these commits exist remotely. Inspect the remote before pushing, and do not push unless the user asks.
 
 Recent commits, newest first:
 
 ```text
+273fb2e fix: hide raw text when the Pairing backend is unavailable (#7)
+c3c9b2b fix: let the repository harness start when the dev app is absent (#6)
+aaea9f3 test: keep the emulator correction fixture in the past (#6)
+b5d6dcc docs: refresh implementation handoff after #6 and #7
 6a8cbe5 feat: form an optional Pair from Together (#7)
 0fc5c01 feat: complete, undo, and correct Daily Occurrences (#6)
 eaa29cc docs: add implementation handoff
@@ -41,9 +45,10 @@ b515902 feat: add transactional Pairing backend core (#7)
 Tracker state:
 
 - Closed: #2, #3, #4, #5.
-- #6 is implemented and committed but left open pending the physical-device Firestore repository harness and a connected UI run; no phone was attached on 2026-11-14.
-- #7 Android half and the development Functions entry are committed but left open pending a development deploy (needs Blaze billing on the development project), App Check debug-token registration, and two-account device acceptance.
-- Dependency-unblocked next: #9 (after #6). #8 needs #6 and #7.
+- #6 is closed. Device evidence: `connectedDevDebugAndroidTest` 39 tests, 0 failed; the Firestore repository harness passed 7/7 twice.
+- #7 stays open and blocked. On 2026-11-15 the user decided not to enable Blaze on the development project, so the `development-only` Functions codebase cannot be deployed and real two-account acceptance cannot run. #8 (blocked by #7) and #10 (Cheer delivery via Functions/FCM) are blocked with it until that changes or ADR-0005 is revisited.
+- The dev build was installed on the test phone on 2026-11-15 and launches without a crash; Together was not exercised (no sign-in).
+- Dependency-unblocked next: #9.
 - #1 remains the open umbrella.
 - #35 and #36 are human-owned. #34 and all production work are outside the current dev-only authorization.
 
@@ -137,9 +142,8 @@ Android and development deployment pieces:
 
 ## Immediate next work
 
-1. Human steps to finish #7: enable Blaze on the development project, deploy with the README's "Development Functions and App Check" command, register the App Check debug token for the development installation, then run the two-account drill (create, enter, mutual identity review, both confirmations, active Together on both phones, rejection paths).
-2. Finish #6: attach the phone and run `./gradlew :app:connectedDevDebugAndroidTest` and `npm --prefix functions run test:android-repository`. The latter needs `DUIT_ANDROID_REPOSITORY_ALLOW_DEV_APP_RESET=1` if the dev app is installed.
-3. Start #9.
+1. Start #9 (the only dependency-unblocked issue).
+2. #7 is blocked: it needs Blaze on the development project (declined 2026-11-15) or a revisit of ADR-0005. If that changes, deploy with the README's "Development Functions and App Check" command, register the App Check debug token, then run the two-account drill (create, enter, mutual identity review, both confirmations, active Together on both phones, rejection paths). Until then #8 and #10 stay blocked.
 
 Decision note: development self-admission was drafted and deliberately dropped on 2026-11-14. Member Approval stays administrator-created in every environment (ADR-0006). If `firestore.development.rules` was ever deployed to the development project, redeploy `firestore.rules` with `firebase.json`.
 
