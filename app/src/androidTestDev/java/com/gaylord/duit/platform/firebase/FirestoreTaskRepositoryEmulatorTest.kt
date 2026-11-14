@@ -154,7 +154,7 @@ class FirestoreTaskRepositoryEmulatorTest {
         val taskIdentifier = TaskIdentifier("task-${UUID.randomUUID()}")
         val subtaskIdentifier = SubtaskIdentifier("subtask-${UUID.randomUUID()}")
         val completionMoment = Instant.parse("2026-08-09T07:15:00Z")
-        val correctedMoment = Instant.parse("2026-08-09T08:05:00Z")
+        val correctedMoment = Instant.parse("2026-08-09T07:05:00Z")
         val workspace =
             occurrenceWorkspace(
                 ownerIdentifier = ownerIdentifier,
