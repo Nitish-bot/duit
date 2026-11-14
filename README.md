@@ -127,7 +127,9 @@ With an authorized Android device or Emulator connected, run the Android Firesto
 npm --prefix functions run test:android-repository
 ```
 
-That command starts a dedicated local Firestore Emulator, installs only the repository test, and temporarily configures `adb reverse` so the device can reach it. Its permissive test Rules exist only to seed malformed documents and must never be deployed. Ordinary `connectedDevDebugAndroidTest` runs skip this class unless the dedicated command opts in.
+That command starts a dedicated local Firestore Emulator, builds the test APK once, and invokes only the seven repository methods directly. For a physical device on the same trusted network, the harness binds the Emulator to the matching host interface so Firestore can reconnect without depending on a long-lived USB tunnel. Android emulators and devices without a matching network fall back to a temporary `adb reverse` route. Set `DUIT_ANDROID_FIRESTORE_HOST` to override the detected host, or set it to `127.0.0.1` to force `adb reverse`. Keep a physical device out of its system low-storage state before running this suite.
+
+The harness installs and removes `com.gaylord.duit.dev` between repository methods to guarantee isolated local persistence. If that development app is already installed, the harness stops before changing it because removal can discard signed-in state and unsynchronized Tasks. After preserving or synchronizing that data, explicitly authorize the reset with `DUIT_ANDROID_REPOSITORY_ALLOW_DEV_APP_RESET=1`. The dedicated Emulator binds only for the duration of the test; its permissive test Rules exist only to seed malformed documents and must never be deployed. Ordinary `connectedDevDebugAndroidTest` runs skip this class unless the dedicated command opts in.
 
 For an interactive emulator session, keep this running:
 

@@ -21,7 +21,17 @@ internal val runtimeWorkspaceSessionScope =
 private val runtimeWorkspaceSessionOperations =
     WorkspaceSessionOperationCoordinator(runtimeWorkspaceSessionScope)
 
-internal fun createRuntimeWorkspace(firebaseRuntime: FirebaseRuntime): DuitWorkspace {
+private val runtimeWorkspaceLock = Any()
+
+@Volatile
+private var runtimeWorkspace: DuitWorkspace? = null
+
+internal fun createRuntimeWorkspace(firebaseRuntime: FirebaseRuntime): DuitWorkspace =
+    runtimeWorkspace ?: synchronized(runtimeWorkspaceLock) {
+        runtimeWorkspace ?: buildRuntimeWorkspace(firebaseRuntime).also { runtimeWorkspace = it }
+    }
+
+private fun buildRuntimeWorkspace(firebaseRuntime: FirebaseRuntime): DuitWorkspace {
     val workspaceServices = firebaseRuntime.workspaceServices
 
     return DuitWorkspace.authenticated(

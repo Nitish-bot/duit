@@ -62,11 +62,12 @@ import com.gaylord.duit.designsystem.DuitTheme
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.feature.plan.PlanScreen
 import com.gaylord.duit.feature.tasks.TasksScreen
-import com.gaylord.duit.feature.today.EmptyPersonalAgenda
+import com.gaylord.duit.feature.tasks.TasksEventHandler
+import com.gaylord.duit.feature.tasks.TasksUiState
 import com.gaylord.duit.feature.today.TodayScreen
+import com.gaylord.duit.feature.today.TodayEventHandler
+import com.gaylord.duit.feature.today.TodayUiState
 import com.gaylord.duit.feature.together.TogetherScreen
-import com.gaylord.duit.workspace.CommandIdentifier
-import com.gaylord.duit.workspace.PersonalAgenda
 import com.gaylord.duit.workspace.WorkspaceAccessAction
 import com.gaylord.duit.workspace.WorkspaceAccessState
 import com.gaylord.duit.workspace.WorkspaceRestorationSource
@@ -76,24 +77,18 @@ fun DuitApp(
     darkTheme: Boolean = androidx.compose.foundation.isSystemInDarkTheme(),
     accessState: WorkspaceAccessState = DefaultWorkspaceAccessState,
     onAccessAction: (WorkspaceAccessAction) -> Unit = {},
-    personalAgenda: PersonalAgenda = EmptyPersonalAgenda,
-    onAddPrivateTaskToToday: (CommandIdentifier, String, (Boolean) -> Unit) -> Unit =
-        { _, _, result ->
-            result(false)
-        },
-    onAddPrivateDailyTaskToToday: (
-        CommandIdentifier,
-        String,
-        String?,
-        (Boolean) -> Unit,
-    ) -> Unit = { _, _, _, result -> result(false) },
+    todayState: TodayUiState = TodayUiState(),
+    onTodayEvent: TodayEventHandler = {},
+    tasksState: TasksUiState = TasksUiState(),
+    onTasksEvent: TasksEventHandler = {},
 ) {
     DuitTheme(darkTheme = darkTheme) {
         when (accessState) {
             is WorkspaceAccessState.Ready -> DuitShell(
-                personalAgenda = personalAgenda,
-                onAddPrivateTaskToToday = onAddPrivateTaskToToday,
-                onAddPrivateDailyTaskToToday = onAddPrivateDailyTaskToToday,
+                todayState = todayState,
+                onTodayEvent = onTodayEvent,
+                tasksState = tasksState,
+                onTasksEvent = onTasksEvent,
             )
             else -> WorkspaceAccessGate(
                 accessState = accessState,
@@ -312,17 +307,10 @@ private fun AccessGateSecondaryAction(
 @Composable
 private fun DuitShell(
     navController: NavHostController = rememberNavController(),
-    personalAgenda: PersonalAgenda = EmptyPersonalAgenda,
-    onAddPrivateTaskToToday: (CommandIdentifier, String, (Boolean) -> Unit) -> Unit =
-        { _, _, result ->
-            result(false)
-        },
-    onAddPrivateDailyTaskToToday: (
-        CommandIdentifier,
-        String,
-        String?,
-        (Boolean) -> Unit,
-    ) -> Unit = { _, _, _, result -> result(false) },
+    todayState: TodayUiState = TodayUiState(),
+    onTodayEvent: TodayEventHandler = {},
+    tasksState: TasksUiState = TasksUiState(),
+    onTasksEvent: TasksEventHandler = {},
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: DuitDestination.Today.route
@@ -376,14 +364,18 @@ private fun DuitShell(
         ) {
             composable(DuitDestination.Today.route) {
                 TodayScreen(
-                    personalAgenda = personalAgenda,
-                    onAddPrivateTaskToToday = onAddPrivateTaskToToday,
-                    onAddPrivateDailyTaskToToday = onAddPrivateDailyTaskToToday,
+                    state = todayState,
+                    onEvent = onTodayEvent,
                 )
             }
             composable(DuitDestination.Together.route) { TogetherScreen() }
             composable(DuitDestination.Plan.route) { PlanScreen() }
-            composable(DuitDestination.Tasks.route) { TasksScreen() }
+            composable(DuitDestination.Tasks.route) {
+                TasksScreen(
+                    state = tasksState,
+                    onEvent = onTasksEvent,
+                )
+            }
         }
     }
 }

@@ -5,8 +5,15 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.gaylord.duit.data.repository.TaskRepository
+import com.gaylord.duit.domain.model.CompletionEpoch
+import com.gaylord.duit.domain.model.CompletionRecord
 import com.gaylord.duit.domain.model.MemberActionMoment
 import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.OccurrenceKey
+import com.gaylord.duit.domain.model.OccurrenceOutcome
+import com.gaylord.duit.domain.model.OccurrenceSnapshot
+import com.gaylord.duit.domain.model.OccurrenceState
+import com.gaylord.duit.domain.model.OccurrenceSubtaskState
 import com.gaylord.duit.domain.model.RecurrenceRule
 import com.gaylord.duit.domain.model.RecurringSeries
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
@@ -21,14 +28,23 @@ import com.gaylord.duit.domain.model.TaskReminderConfiguration
 import com.gaylord.duit.domain.model.TaskRevision
 import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
+import com.gaylord.duit.notifications.ReminderGateway
+import com.gaylord.duit.notifications.ScheduledTaskReminder
 import com.gaylord.duit.workspace.AuthenticationSignOut
 import com.gaylord.duit.workspace.AuthenticationSignOutFailure
+import com.gaylord.duit.workspace.CommandIdentifier
+import com.gaylord.duit.workspace.DuitWorkspace
+import com.gaylord.duit.workspace.InitialTaskIdentifiers
+import com.gaylord.duit.workspace.MemberCommand
 import com.gaylord.duit.workspace.OwnerWorkspaceHydration
+import com.gaylord.duit.workspace.TaskIdentityGenerator
+import com.gaylord.duit.workspace.ZoneProvider
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Source
 import java.time.Instant
+import java.time.Clock
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -38,6 +54,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -62,7 +79,276 @@ class FirestoreTaskRepositoryEmulatorTest {
     }
 
     @Test
-    fun offlineCreationSurvivesRepositoryReconstructionAndReplaysAtTheOwnerPaths() = runBlocking {
+    fun completedOccurrenceStateIsImmediateOfflineAndSurvivesCleanServerHydration() =
+        runRepositoryTest {
+        val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
+        val creation = dailyCreation(ownerIdentifier)
+        val state = completedOccurrenceState(creation)
+
+        firestore.disableNetwork().await()
+        try {
+            repository.putRecurringSeriesIfAbsent(creation)
+            assertEquals(
+                state,
+                repository.putOccurrenceState(ownerIdentifier, state),
+            )
+
+            firestore.terminate().await()
+            firestore = connectFirestoreToEmulator(firebaseApp)
+            firestore.disableNetwork().await()
+            assertEquals(
+                state,
+                withTimeout(RepositoryObservationTimeoutMillis) {
+                    repository.observeOccurrenceState(ownerIdentifier, state.key)
+                        .filterNotNull()
+                        .first()
+                },
+            )
+            assertEquals(
+                listOf(state),
+                withTimeout(RepositoryObservationTimeoutMillis) {
+                    repository.observeOccurrenceStates(ownerIdentifier, state.key.taskIdentifier)
+                        .first()
+                },
+            )
+        } finally {
+            firestore.enableNetwork().await()
+        }
+        withTimeout(ServerSynchronizationTimeoutMillis) {
+            firestore.waitForPendingWrites().await()
+        }
+
+        val occurrenceStates =
+            firestore.collection("users")
+                .document(ownerIdentifier.value)
+                .collection("tasks")
+                .document(creation.series.identifier.value)
+                .collection("occurrenceStates")
+                .get(Source.SERVER)
+                .await()
+        assertEquals(listOf(state.key.nominalDate.toString()), occurrenceStates.documents.map { it.id })
+
+        firestore.terminate().await()
+        firestore.clearPersistence().await()
+        firestore = connectFirestoreToEmulator(firebaseApp)
+        assertEquals(
+            OwnerWorkspaceHydration.Complete,
+            FirestoreOwnerWorkspaceHydrationGateway { firestore }
+                .hydrate(ownerIdentifier),
+        )
+        assertEquals(
+            state,
+            withTimeout(RepositoryObservationTimeoutMillis) {
+                repository.observeOccurrenceState(ownerIdentifier, state.key)
+                    .filterNotNull()
+                    .first()
+            },
+        )
+    }
+
+    @Test
+    fun occurrenceCommandsStaySingularThroughOfflineRestartAndCleanHydration() =
+        runRepositoryTest {
+        val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
+        val date = LocalDate.of(2026, 8, 9)
+        val taskIdentifier = TaskIdentifier("task-${UUID.randomUUID()}")
+        val subtaskIdentifier = SubtaskIdentifier("subtask-${UUID.randomUUID()}")
+        val completionMoment = Instant.parse("2026-08-09T07:15:00Z")
+        val correctedMoment = Instant.parse("2026-08-09T08:05:00Z")
+        val workspace =
+            occurrenceWorkspace(
+                ownerIdentifier = ownerIdentifier,
+                instant = completionMoment,
+                taskIdentifier = taskIdentifier,
+                subtaskIdentifier = subtaskIdentifier,
+            )
+        val key = OccurrenceKey(taskIdentifier, date)
+
+        firestore.disableNetwork().await()
+        try {
+            workspace.execute(
+                MemberCommand.AddPrivateDailyTaskToToday(
+                    commandIdentifier = CommandIdentifier("create-${UUID.randomUUID()}"),
+                    title = "Water the basil",
+                    subtask = "Check the soil",
+                ),
+            )
+            workspace.execute(
+                MemberCommand.SetOccurrenceSubtaskChecked(
+                    occurrenceKey = key,
+                    subtaskIdentifier = subtaskIdentifier,
+                    isChecked = true,
+                ),
+            )
+            workspace.execute(
+                MemberCommand.CompleteOccurrence(
+                    commandIdentifier = CommandIdentifier("completion-first"),
+                    occurrenceKey = key,
+                    checkedSubtaskIdentifiers = setOf(subtaskIdentifier),
+                ),
+            )
+            workspace.execute(
+                MemberCommand.UndoOccurrenceCompletion(
+                    occurrenceKey = key,
+                    completionEpoch = CompletionEpoch("completion-first"),
+                ),
+            )
+            workspace.execute(
+                MemberCommand.CompleteOccurrence(
+                    commandIdentifier = CommandIdentifier("completion-second"),
+                    occurrenceKey = key,
+                    checkedSubtaskIdentifiers = setOf(subtaskIdentifier),
+                ),
+            )
+            workspace.execute(
+                MemberCommand.CorrectOccurrenceToActionable(
+                    occurrenceKey = key,
+                    completionEpoch = CompletionEpoch("completion-second"),
+                    checkedSubtaskIdentifiers = emptySet(),
+                ),
+            )
+            workspace.execute(
+                MemberCommand.CompleteOccurrence(
+                    commandIdentifier = CommandIdentifier("completion-third"),
+                    occurrenceKey = key,
+                ),
+            )
+            workspace.execute(
+                MemberCommand.CorrectOccurrenceCompletion(
+                    occurrenceKey = key,
+                    completionEpoch = CompletionEpoch("completion-third"),
+                    correctedCompletedAt =
+                        MemberActionMoment(
+                            instant = correctedMoment,
+                            localDate = date,
+                            zoneId = ZoneId.of("UTC"),
+                        ),
+                    checkedSubtaskIdentifiers = setOf(subtaskIdentifier),
+                ),
+            )
+            workspace.execute(
+                MemberCommand.UndoOccurrenceCompletion(
+                    occurrenceKey = key,
+                    completionEpoch = CompletionEpoch("completion-first"),
+                ),
+            )
+
+            assertCorrectedOccurrence(
+                workspace = workspace,
+                expectedKey = key,
+                expectedMoment = correctedMoment,
+                expectedSubtaskIdentifier = subtaskIdentifier,
+            )
+
+            firestore.terminate().await()
+            firestore = connectFirestoreToEmulator(firebaseApp)
+            firestore.disableNetwork().await()
+            assertCorrectedOccurrence(
+                workspace =
+                    occurrenceWorkspace(
+                        ownerIdentifier = ownerIdentifier,
+                        instant = completionMoment,
+                        taskIdentifier = taskIdentifier,
+                        subtaskIdentifier = subtaskIdentifier,
+                    ),
+                expectedKey = key,
+                expectedMoment = correctedMoment,
+                expectedSubtaskIdentifier = subtaskIdentifier,
+            )
+        } finally {
+            firestore.enableNetwork().await()
+        }
+        withTimeout(ServerSynchronizationTimeoutMillis) {
+            firestore.waitForPendingWrites().await()
+        }
+        val serverStates =
+            firestore.collection("users")
+                .document(ownerIdentifier.value)
+                .collection("tasks")
+                .document(taskIdentifier.value)
+                .collection("occurrenceStates")
+                .get(Source.SERVER)
+                .await()
+        assertEquals(listOf(date.toString()), serverStates.documents.map { it.id })
+
+        firestore.terminate().await()
+        firestore.clearPersistence().await()
+        firestore = connectFirestoreToEmulator(firebaseApp)
+        assertEquals(
+            OwnerWorkspaceHydration.Complete,
+            FirestoreOwnerWorkspaceHydrationGateway { firestore }
+                .hydrate(ownerIdentifier),
+        )
+        assertCorrectedOccurrence(
+            workspace =
+                occurrenceWorkspace(
+                    ownerIdentifier = ownerIdentifier,
+                    instant = completionMoment,
+                    taskIdentifier = taskIdentifier,
+                    subtaskIdentifier = subtaskIdentifier,
+                ),
+            expectedKey = key,
+            expectedMoment = correctedMoment,
+            expectedSubtaskIdentifier = subtaskIdentifier,
+        )
+
+        val nextDayAgenda =
+            occurrenceWorkspace(
+                ownerIdentifier = ownerIdentifier,
+                instant = Instant.parse("2026-08-10T07:15:00Z"),
+                taskIdentifier = taskIdentifier,
+                subtaskIdentifier = subtaskIdentifier,
+            ).observePersonalAgenda().first()
+        assertEquals(false, nextDayAgenda.tasks.single().occurrence?.subtasks?.single()?.isChecked)
+    }
+
+    private fun occurrenceWorkspace(
+        ownerIdentifier: MemberIdentifier,
+        instant: Instant,
+        taskIdentifier: TaskIdentifier,
+        subtaskIdentifier: SubtaskIdentifier,
+    ): DuitWorkspace =
+        DuitWorkspace(
+            memberIdentifier = ownerIdentifier,
+            clock = Clock.fixed(instant, ZoneId.of("UTC")),
+            zoneProvider = ZoneProvider { ZoneId.of("UTC") },
+            taskIdentities =
+                TaskIdentityGenerator {
+                    InitialTaskIdentifiers(
+                        taskIdentifier = taskIdentifier,
+                        revisionIdentifier =
+                            TaskRevisionIdentifier("standalone-${taskIdentifier.value}"),
+                        seriesRevisionIdentifier =
+                            SeriesRevisionIdentifier("series-${taskIdentifier.value}"),
+                        initialSubtaskIdentifier = subtaskIdentifier,
+                    )
+                },
+            persistence = repository,
+            reminders = NoOpReminderGateway,
+        )
+
+    private suspend fun assertCorrectedOccurrence(
+        workspace: DuitWorkspace,
+        expectedKey: OccurrenceKey,
+        expectedMoment: Instant,
+        expectedSubtaskIdentifier: SubtaskIdentifier,
+    ) {
+        val completionTask = workspace.observePersonalHistory().first().completions.single()
+        val completion =
+            (completionTask.occurrence?.outcome as OccurrenceOutcome.Complete).record
+
+        assertEquals(expectedKey, requireNotNull(completionTask.occurrence).key)
+        assertEquals("completion-third", completion.epoch.value)
+        assertEquals(expectedMoment, completion.completedAt.instant)
+        assertEquals(
+            listOf(OccurrenceSubtaskState(expectedSubtaskIdentifier, isChecked = true)),
+            completion.subtasks,
+        )
+    }
+
+    @Test
+    fun offlineCreationSurvivesRepositoryReconstructionAndReplaysAtTheOwnerPaths() =
+        runRepositoryTest {
         val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
         val creation = creation(ownerIdentifier)
         val replay =
@@ -134,7 +420,8 @@ class FirestoreTaskRepositoryEmulatorTest {
     }
 
     @Test
-    fun offlineDailySeriesSurvivesReconstructionAndSynchronizesWithoutReplacement() = runBlocking {
+    fun offlineDailySeriesSurvivesReconstructionAndSynchronizesWithoutReplacement() =
+        runRepositoryTest {
         val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
         val creation = dailyCreation(ownerIdentifier)
         val replay =
@@ -183,7 +470,8 @@ class FirestoreTaskRepositoryEmulatorTest {
         firestore = connectFirestoreToEmulator(firebaseApp)
         assertEquals(
             OwnerWorkspaceHydration.Complete,
-            FirestoreOwnerWorkspaceHydrationGateway { firestore }.hydrate(ownerIdentifier),
+            FirestoreOwnerWorkspaceHydrationGateway { firestore }
+                .hydrate(ownerIdentifier),
         )
         assertEquals(
             creation,
@@ -197,7 +485,8 @@ class FirestoreTaskRepositoryEmulatorTest {
     }
 
     @Test
-    fun cachedStandaloneTaskIdentityCannotBeOverwrittenByADailySeries() = runBlocking {
+    fun cachedStandaloneTaskIdentityCannotBeOverwrittenByADailySeries() =
+        runRepositoryTest {
         val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
         val standalone = creation(ownerIdentifier)
         val daily = dailyCreation(ownerIdentifier)
@@ -237,7 +526,8 @@ class FirestoreTaskRepositoryEmulatorTest {
     }
 
     @Test
-    fun fractionalFirestoreIntegerIsRejectedThroughTheRepository() = runBlocking {
+    fun fractionalFirestoreIntegerIsRejectedThroughTheRepository() =
+        runRepositoryTest {
         val ownerIdentifier = MemberIdentifier("member-${UUID.randomUUID()}")
         val taskIdentifier = TaskIdentifier("task-${UUID.randomUUID()}")
         val revisionIdentifier = TaskRevisionIdentifier("revision-${UUID.randomUUID()}")
@@ -280,7 +570,9 @@ class FirestoreTaskRepositoryEmulatorTest {
                 "recordedAtZoneId" to "UTC",
             ),
         )
-        write.commit().await()
+        withTimeout(ServerSynchronizationTimeoutMillis) {
+            write.commit().await()
+        }
 
         val failure =
             runCatching {
@@ -298,7 +590,8 @@ class FirestoreTaskRepositoryEmulatorTest {
     }
 
     @Test
-    fun signOutWithNoPendingWritesStillRequiresTheServer() = runBlocking {
+    fun signOutWithNoPendingWritesStillRequiresTheServer() =
+        runRepositoryTest {
         val firestoreSession = FirebaseFirestoreSession(firebaseApp)
         firestore.disableNetwork().await()
         try {
@@ -394,6 +687,43 @@ class FirestoreTaskRepositoryEmulatorTest {
         )
     }
 
+    private fun completedOccurrenceState(
+        creation: RecurringSeriesCreation,
+    ): OccurrenceState {
+        val key = OccurrenceKey(creation.series.identifier, creation.initialRevision.startsOn)
+        val completedSubtasks =
+            creation.initialRevision.subtaskTemplate.map { template ->
+                OccurrenceSubtaskState(template.identifier, isChecked = true)
+            }
+        val actionableSubtasks =
+            completedSubtasks.map { subtask -> subtask.copy(isChecked = false) }
+        val record =
+            CompletionRecord(
+                epoch = CompletionEpoch("completion-${UUID.randomUUID()}"),
+                snapshot =
+                    OccurrenceSnapshot(
+                        seriesRevision = creation.initialRevision,
+                        nominalDate = key.nominalDate,
+                        effectiveDate = key.nominalDate,
+                    ),
+                completedAt =
+                    MemberActionMoment(
+                        instant = Instant.parse("2026-08-09T02:15:00.456Z"),
+                        localDate = LocalDate.parse("2026-08-09"),
+                        zoneId = ZoneId.of("Asia/Kolkata"),
+                    ),
+                subtasks = completedSubtasks,
+            )
+        return OccurrenceState(
+            key = key,
+            snapshot = record.snapshot,
+            subtasks = completedSubtasks,
+            outcome = OccurrenceOutcome.Complete(record),
+            actionableSubtasksBeforeCompletion = actionableSubtasks,
+            invalidatedCompletionEpochs = setOf(CompletionEpoch("invalidated-earlier-epoch")),
+        )
+    }
+
     companion object {
         private lateinit var firebaseApp: FirebaseApp
         private lateinit var firestore: FirebaseFirestore
@@ -422,8 +752,10 @@ class FirestoreTaskRepositoryEmulatorTest {
         @AfterClass
         fun disconnectFromFirestoreEmulator() = runBlocking {
             if (!::firestore.isInitialized) return@runBlocking
-            firestore.terminate().await()
-            firestore.clearPersistence().await()
+            withTimeoutOrNull(FirestoreCleanupTimeoutMillis) {
+                firestore.terminate().await()
+                firestore.clearPersistence().await()
+            }
             firebaseApp.delete()
         }
 
@@ -433,14 +765,34 @@ class FirestoreTaskRepositoryEmulatorTest {
     }
 }
 
+private fun runRepositoryTest(block: suspend () -> Unit) =
+    runBlocking {
+        withTimeout(AndroidRepositoryTestTimeoutMillis) {
+            block()
+        }
+    }
+
+private object NoOpReminderGateway : ReminderGateway {
+    override suspend fun reconcile(reminder: ScheduledTaskReminder) = Unit
+}
+
 private fun connectFirestoreToEmulator(firebaseApp: FirebaseApp): FirebaseFirestore =
     FirebaseFirestore.getInstance(firebaseApp).also { firestore ->
-        firestore.useEmulator(AndroidDeviceLoopbackHost, AndroidRepositoryTestFirestorePort)
+        firestore.useEmulator(repositoryEmulatorHost(), AndroidRepositoryTestFirestorePort)
     }
+
+private fun repositoryEmulatorHost(): String =
+    InstrumentationRegistry.getArguments()
+        .getString(RepositoryEmulatorHostArgument)
+        ?.takeIf(String::isNotBlank)
+        ?: AndroidDeviceLoopbackHost
 
 private const val AndroidRepositoryTestProjectIdentifier = "demo-duit-android-repository"
 private const val RunRepositoryEmulatorArgument = "runFirestoreRepositoryEmulator"
+private const val RepositoryEmulatorHostArgument = "firestoreRepositoryEmulatorHost"
 private const val AndroidDeviceLoopbackHost = "127.0.0.1"
 private const val AndroidRepositoryTestFirestorePort = 8081
 private const val RepositoryObservationTimeoutMillis = 10_000L
 private const val ServerSynchronizationTimeoutMillis = 20_000L
+private const val FirestoreCleanupTimeoutMillis = 5_000L
+private const val AndroidRepositoryTestTimeoutMillis = 60_000L

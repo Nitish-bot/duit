@@ -1,6 +1,7 @@
 package com.gaylord.duit.app
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -31,9 +32,12 @@ import com.gaylord.duit.domain.model.SubtaskIdentifier
 import com.gaylord.duit.domain.model.TaskIdentifier
 import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
+import com.gaylord.duit.feature.today.TodayEvent
+import com.gaylord.duit.feature.today.TodayTaskAdditionSuccess
 import com.gaylord.duit.feature.today.TodayTaskTitleInputTag
 import com.gaylord.duit.feature.today.TodayTaskRepeatDailyTag
 import com.gaylord.duit.feature.today.TodayTaskSubtaskInputTag
+import com.gaylord.duit.feature.today.TodayUiState
 import com.gaylord.duit.workspace.AgendaTask
 import com.gaylord.duit.workspace.AgendaOccurrence
 import com.gaylord.duit.workspace.AgendaSubtask
@@ -101,7 +105,10 @@ class DuitAppTest {
         composeRule.setContent {
             DuitApp(
                 darkTheme = false,
-                personalAgenda = agendaWithTask(title = "Water the balcony herbs"),
+                todayState =
+                    TodayUiState(
+                        personalAgenda = agendaWithTask(title = "Water the balcony herbs"),
+                    ),
             )
         }
 
@@ -115,8 +122,9 @@ class DuitAppTest {
         composeRule.setContent {
             DuitApp(
                 darkTheme = false,
-                personalAgenda =
-                    PersonalAgenda(
+                todayState =
+                    TodayUiState(
+                        personalAgenda = PersonalAgenda(
                         date = date,
                         tasks =
                             listOf(
@@ -150,6 +158,7 @@ class DuitAppTest {
                                         ),
                                 ),
                             ),
+                        ),
                     ),
             )
         }
@@ -166,9 +175,9 @@ class DuitAppTest {
         composeRule.setContent {
             DuitApp(
                 darkTheme = false,
-                onAddPrivateTaskToToday = { _, title, result ->
-                    addedTitles += title
-                    result(true)
+                onTodayEvent = { event ->
+                    val addition = event as TodayEvent.AddPrivateTaskToToday
+                    addedTitles += addition.title
                 },
             )
         }
@@ -181,13 +190,20 @@ class DuitAppTest {
     @Test
     fun dailyTaskAddLetsTheOwnerChooseDailyAndOneNormalizedSubtask() {
         val additions = mutableListOf<DailyTaskAddition>()
+        val todayState = mutableStateOf(TodayUiState())
 
         composeRule.setContent {
             DuitApp(
                 darkTheme = false,
-                onAddPrivateDailyTaskToToday = { _, title, subtask, result ->
-                    additions += DailyTaskAddition(title, subtask)
-                    result(true)
+                todayState = todayState.value,
+                onTodayEvent = { event ->
+                    val addition = event as TodayEvent.AddPrivateDailyTaskToToday
+                    additions += DailyTaskAddition(addition.title, addition.subtask)
+                    todayState.value =
+                        todayState.value.copy(
+                            taskAdditionSuccess =
+                                TodayTaskAdditionSuccess(1, addition.commandIdentifier),
+                        )
                 },
             )
         }
@@ -210,6 +226,7 @@ class DuitAppTest {
     @Test
     fun privateTaskAddActionEmitsTrimmedTitleAtTwoHundredPercentText() {
         val addedTitles = mutableListOf<String>()
+        val todayState = mutableStateOf(TodayUiState())
 
         composeRule.setContent {
             val deviceDensity = LocalDensity.current.density
@@ -221,9 +238,15 @@ class DuitAppTest {
             ) {
                 DuitApp(
                     darkTheme = false,
-                    onAddPrivateTaskToToday = { _, title, result ->
-                        addedTitles += title
-                        result(true)
+                    todayState = todayState.value,
+                    onTodayEvent = { event ->
+                        val addition = event as TodayEvent.AddPrivateTaskToToday
+                        addedTitles += addition.title
+                        todayState.value =
+                            todayState.value.copy(
+                                taskAdditionSuccess =
+                                    TodayTaskAdditionSuccess(1, addition.commandIdentifier),
+                            )
                     },
                 )
             }
@@ -246,9 +269,9 @@ class DuitAppTest {
         composeRule.setContent {
             DuitApp(
                 darkTheme = false,
-                onAddPrivateTaskToToday = { commandIdentifier, _, result ->
-                    commandIdentifiers += commandIdentifier
-                    result(false)
+                onTodayEvent = { event ->
+                    val addition = event as TodayEvent.AddPrivateTaskToToday
+                    commandIdentifiers += addition.commandIdentifier
                 },
             )
         }
@@ -257,7 +280,6 @@ class DuitAppTest {
         composeRule.onNodeWithText("Add Task").performClick()
 
         composeRule.onNodeWithTag(TodayTaskTitleInputTag)
-            .assertIsNotEnabled()
             .assertEditableTextEquals("Water the herbs")
         composeRule.onNodeWithText("Add Task").assertIsEnabled()
             .performClick()
@@ -267,12 +289,16 @@ class DuitAppTest {
 
     @Test
     fun pendingPrivateTaskAddDisablesDraftUntilPersistenceResponds() {
-        var completeAdd: ((Boolean) -> Unit)? = null
+        val todayState = mutableStateOf(TodayUiState())
 
         composeRule.setContent {
             DuitApp(
                 darkTheme = false,
-                onAddPrivateTaskToToday = { _, _, result -> completeAdd = result },
+                todayState = todayState.value,
+                onTodayEvent = { event ->
+                    require(event is TodayEvent.AddPrivateTaskToToday)
+                    todayState.value = todayState.value.copy(isCommandPending = true)
+                },
             )
         }
 
@@ -282,9 +308,10 @@ class DuitAppTest {
         composeRule.onNodeWithTag(TodayTaskTitleInputTag).assertIsNotEnabled()
         composeRule.onNodeWithText("Add Task").assertIsNotEnabled()
 
-        composeRule.runOnIdle { requireNotNull(completeAdd)(false) }
+        composeRule.runOnIdle {
+            todayState.value = todayState.value.copy(isCommandPending = false)
+        }
         composeRule.onNodeWithTag(TodayTaskTitleInputTag)
-            .assertIsNotEnabled()
             .assertEditableTextEquals("Water the herbs")
         composeRule.onNodeWithText("Add Task").assertIsEnabled()
     }
@@ -293,11 +320,15 @@ class DuitAppTest {
     fun recreationKeepsAPendingPrivateTaskDraftAvailableForRetry() {
         val restorationTester = StateRestorationTester(composeRule)
         val commandIdentifiers = mutableListOf<CommandIdentifier>()
+        val todayState = mutableStateOf(TodayUiState())
         restorationTester.setContent {
             DuitApp(
                 darkTheme = false,
-                onAddPrivateTaskToToday = { commandIdentifier, _, _ ->
-                    commandIdentifiers += commandIdentifier
+                todayState = todayState.value,
+                onTodayEvent = { event ->
+                    val addition = event as TodayEvent.AddPrivateTaskToToday
+                    commandIdentifiers += addition.commandIdentifier
+                    todayState.value = todayState.value.copy(isCommandPending = true)
                 },
             )
         }
@@ -311,6 +342,9 @@ class DuitAppTest {
         composeRule.onNodeWithTag(TodayTaskTitleInputTag)
             .assertIsNotEnabled()
             .assertEditableTextEquals("Water the herbs")
+        composeRule.runOnIdle {
+            todayState.value = todayState.value.copy(isCommandPending = false)
+        }
         composeRule.onNodeWithText("Add Task").assertIsEnabled().performClick()
         assertEquals(2, commandIdentifiers.size)
         assertEquals(commandIdentifiers.first(), commandIdentifiers.last())
@@ -474,7 +508,10 @@ class DuitAppTest {
                     failure = AuthenticationSignOutFailure.ServerUnavailable,
                 ),
                 onAccessAction = { actions += it },
-                personalAgenda = agendaWithTask("Water the balcony herbs"),
+                todayState =
+                    TodayUiState(
+                        personalAgenda = agendaWithTask("Water the balcony herbs"),
+                    ),
             )
         }
 

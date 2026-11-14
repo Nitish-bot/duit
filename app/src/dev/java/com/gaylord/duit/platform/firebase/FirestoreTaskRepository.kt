@@ -2,8 +2,15 @@ package com.gaylord.duit.platform.firebase
 
 import android.util.Log
 import com.gaylord.duit.data.repository.TaskRepository
+import com.gaylord.duit.domain.model.CompletionEpoch
+import com.gaylord.duit.domain.model.CompletionRecord
 import com.gaylord.duit.domain.model.MemberActionMoment
 import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.OccurrenceKey
+import com.gaylord.duit.domain.model.OccurrenceOutcome
+import com.gaylord.duit.domain.model.OccurrenceSnapshot
+import com.gaylord.duit.domain.model.OccurrenceState
+import com.gaylord.duit.domain.model.OccurrenceSubtaskState
 import com.gaylord.duit.domain.model.RecurrenceRule
 import com.gaylord.duit.domain.model.RecurringSeries
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
@@ -165,6 +172,92 @@ internal class FirestoreTaskRepository(
             },
         )
     }
+
+    override suspend fun putOccurrenceState(
+        ownerIdentifier: MemberIdentifier,
+        state: OccurrenceState,
+    ): OccurrenceState {
+        val paths = FirestoreTaskPaths(firestoreProvider(), ownerIdentifier)
+        val write =
+            paths.occurrenceState(state.key)
+                .set(FirestoreOccurrenceStateCodec.encode(ownerIdentifier, state))
+
+        return awaitLocallyVisibleWrite(
+            commit = write,
+            taskIdentifier = state.key.taskIdentifier,
+            observeValue = {
+                observeOccurrenceState(
+                    ownerIdentifier = ownerIdentifier,
+                    occurrenceKey = state.key,
+                )
+            },
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun observeOccurrenceState(
+        ownerIdentifier: MemberIdentifier,
+        occurrenceKey: OccurrenceKey,
+    ): Flow<OccurrenceState?> =
+        callbackFlow {
+            val paths = FirestoreTaskPaths(firestoreProvider(), ownerIdentifier)
+            val registration =
+                paths.occurrenceState(occurrenceKey)
+                    .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                        when {
+                            error != null -> close(error)
+                            snapshot != null -> trySend(snapshot)
+                        }
+                    }
+
+            awaitClose { registration.remove() }
+        }.mapLatest { snapshot ->
+            if (!snapshot.exists()) return@mapLatest null
+            check(snapshot.id == occurrenceKey.nominalDate.toString()) {
+                "Occurrence State date does not match its Firestore path"
+            }
+            FirestoreOccurrenceStateCodec.decode(
+                ownerIdentifier = ownerIdentifier,
+                fields = snapshot.requiredFields(),
+            ).also { state ->
+                check(state.key == occurrenceKey) {
+                    "Occurrence State identity does not match its Firestore path"
+                }
+            }
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun observeOccurrenceStates(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+    ): Flow<List<OccurrenceState>> =
+        callbackFlow {
+            val paths = FirestoreTaskPaths(firestoreProvider(), ownerIdentifier)
+            val registration =
+                paths.occurrenceStates(taskIdentifier)
+                    .addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+                        when {
+                            error != null -> close(error)
+                            snapshot != null -> trySend(snapshot)
+                        }
+                    }
+
+            awaitClose { registration.remove() }
+        }.mapLatest { snapshot ->
+            snapshot.documents.map { document ->
+                FirestoreOccurrenceStateCodec.decode(
+                    ownerIdentifier = ownerIdentifier,
+                    fields = document.requiredFields(),
+                ).also { state ->
+                    check(state.key.taskIdentifier == taskIdentifier) {
+                        "Occurrence State belongs to another Task"
+                    }
+                    check(document.id == state.key.nominalDate.toString()) {
+                        "Occurrence State date does not match its Firestore path"
+                    }
+                }
+            }.sortedBy { it.key.nominalDate }
+        }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun observeStandaloneTasks(
@@ -462,6 +555,14 @@ private class FirestoreTaskPaths(
     fun reminder(taskIdentifier: TaskIdentifier): DocumentReference =
         owner.collection(TaskRemindersCollection)
             .document(taskIdentifier.value)
+
+    fun occurrenceState(occurrenceKey: OccurrenceKey): DocumentReference =
+        task(occurrenceKey.taskIdentifier)
+            .collection(OccurrenceStatesCollection)
+            .document(occurrenceKey.nominalDate.toString())
+
+    fun occurrenceStates(taskIdentifier: TaskIdentifier) =
+        task(taskIdentifier).collection(OccurrenceStatesCollection)
 }
 
 internal data class FirestoreStandaloneTaskDocuments(
@@ -474,6 +575,190 @@ internal data class FirestoreRecurringSeriesDocuments(
     val task: Map<String, Any>,
     val revision: Map<String, Any>,
 )
+
+internal object FirestoreOccurrenceStateCodec {
+    fun encode(
+        ownerIdentifier: MemberIdentifier,
+        state: OccurrenceState,
+    ): Map<String, Any> {
+        val fields =
+            mutableMapOf<String, Any>(
+                SchemaVersionField to CurrentSchemaVersion,
+                OwnerIdentifierField to ownerIdentifier.value,
+                TaskIdentifierField to state.key.taskIdentifier.value,
+                NominalDateField to state.key.nominalDate.toString(),
+                OccurrenceSubtasksField to state.subtasks.encodeOccurrenceSubtasks(),
+                EffectiveDateField to state.snapshot.effectiveDate.toString(),
+                DefinitionSnapshotField to encodeDefinitionSnapshot(state.snapshot.seriesRevision),
+                InvalidatedCompletionEpochsField to
+                    state.invalidatedCompletionEpochs.map(CompletionEpoch::value).sorted(),
+            )
+
+        when (val outcome = state.outcome) {
+            null -> fields[OutcomeKindField] = ActionableOutcomeKind
+            is OccurrenceOutcome.Complete -> {
+                val record = outcome.record
+                fields[OutcomeKindField] = CompleteOutcomeKind
+                fields[CompletionEpochField] = record.epoch.value
+                fields[CompletedAtInstantMillisField] = record.completedAt.instant.toEpochMilli()
+                fields[CompletedAtLocalDateField] = record.completedAt.localDate.toString()
+                fields[CompletedAtZoneIdentifierField] = record.completedAt.zoneId.id
+                fields[ActionableSubtasksBeforeCompletionField] =
+                    requireNotNull(state.actionableSubtasksBeforeCompletion) {
+                        "Completed Occurrence State is missing its immediate Undo state"
+                    }.encodeOccurrenceSubtasks()
+            }
+        }
+        return fields
+    }
+
+    fun decode(
+        ownerIdentifier: MemberIdentifier,
+        fields: Map<String, Any>,
+    ): OccurrenceState {
+        fields.requireCurrentSchema()
+        require(fields.requiredString(OwnerIdentifierField) == ownerIdentifier.value) {
+            "Occurrence State owner does not match its Firestore owner path"
+        }
+        val key =
+            OccurrenceKey(
+                taskIdentifier = TaskIdentifier(fields.requiredString(TaskIdentifierField)),
+                nominalDate = LocalDate.parse(fields.requiredString(NominalDateField)),
+            )
+        val subtasks = fields.requiredMapList(OccurrenceSubtasksField).decodeOccurrenceSubtasks()
+        val snapshot =
+            OccurrenceSnapshot(
+                seriesRevision = decodeDefinitionSnapshot(fields.requiredMap(DefinitionSnapshotField)),
+                nominalDate = key.nominalDate,
+                effectiveDate = LocalDate.parse(fields.requiredString(EffectiveDateField)),
+            )
+        val invalidatedEpochs =
+            fields.requiredStringList(InvalidatedCompletionEpochsField)
+                .map(::CompletionEpoch)
+                .toSet()
+
+        return when (fields.requiredString(OutcomeKindField)) {
+            ActionableOutcomeKind ->
+                OccurrenceState(
+                    key = key,
+                    snapshot = snapshot,
+                    subtasks = subtasks,
+                    outcome = null,
+                    invalidatedCompletionEpochs = invalidatedEpochs,
+                )
+            CompleteOutcomeKind -> {
+                val completion =
+                    CompletionRecord(
+                        epoch = CompletionEpoch(fields.requiredString(CompletionEpochField)),
+                        snapshot = snapshot,
+                        completedAt =
+                            MemberActionMoment(
+                                instant =
+                                    Instant.ofEpochMilli(
+                                        fields.requiredLong(CompletedAtInstantMillisField),
+                                    ),
+                                localDate =
+                                    LocalDate.parse(
+                                        fields.requiredString(CompletedAtLocalDateField),
+                                    ),
+                                zoneId =
+                                    ZoneId.of(
+                                        fields.requiredString(CompletedAtZoneIdentifierField),
+                                    ),
+                            ),
+                        subtasks = subtasks,
+                    )
+                OccurrenceState(
+                    key = key,
+                    snapshot = snapshot,
+                    subtasks = subtasks,
+                    outcome = OccurrenceOutcome.Complete(completion),
+                    actionableSubtasksBeforeCompletion =
+                        fields.requiredMapList(ActionableSubtasksBeforeCompletionField)
+                            .decodeOccurrenceSubtasks(),
+                    invalidatedCompletionEpochs = invalidatedEpochs,
+                )
+            }
+            else -> error("Unsupported Occurrence outcome")
+        }
+    }
+
+    private fun encodeDefinitionSnapshot(revision: SeriesRevision): Map<String, Any> {
+        val daily = revision.recurrenceRule as? RecurrenceRule.Daily
+            ?: error("Unsupported historical Recurrence Rule")
+        return mutableMapOf<String, Any>(
+            SchemaVersionField to CurrentSchemaVersion,
+            RevisionIdentifierField to revision.identifier.value,
+            TaskIdentifierField to revision.taskIdentifier.value,
+            TitleField to revision.title,
+            SubtaskTemplateField to
+                revision.subtaskTemplate.map { subtask ->
+                    mapOf(
+                        SubtaskIdentifierField to subtask.identifier.value,
+                        SubtaskLabelField to subtask.label,
+                    )
+                },
+            RecurrenceKindField to DailyRecurrenceKind,
+            EveryDaysField to daily.everyDays.toLong(),
+            StartsOnField to revision.startsOn.toString(),
+            RecordedAtInstantMillisField to revision.recordedAt.instant.toEpochMilli(),
+            RecordedAtLocalDateField to revision.recordedAt.localDate.toString(),
+            RecordedAtZoneIdentifierField to revision.recordedAt.zoneId.id,
+        ).also { snapshot ->
+            revision.endsOnInclusive?.let { snapshot[EndsOnInclusiveField] = it.toString() }
+        }
+    }
+
+    private fun decodeDefinitionSnapshot(fields: Map<String, Any>): SeriesRevision {
+        fields.requireCurrentSchema()
+        require(fields.requiredString(RecurrenceKindField) == DailyRecurrenceKind) {
+            "Unsupported historical Recurrence Rule"
+        }
+        val everyDays = fields.requiredLong(EveryDaysField)
+        require(everyDays in 1..Int.MAX_VALUE.toLong()) {
+            "Firestore Task field '$EveryDaysField' is outside the supported range"
+        }
+        return SeriesRevision(
+            identifier = SeriesRevisionIdentifier(fields.requiredString(RevisionIdentifierField)),
+            taskIdentifier = TaskIdentifier(fields.requiredString(TaskIdentifierField)),
+            title = fields.requiredString(TitleField),
+            subtaskTemplate =
+                fields.requiredMapList(SubtaskTemplateField).map { subtask ->
+                    SubtaskTemplate(
+                        identifier =
+                            SubtaskIdentifier(subtask.requiredString(SubtaskIdentifierField)),
+                        label = subtask.requiredString(SubtaskLabelField),
+                    )
+                },
+            recurrenceRule = RecurrenceRule.Daily(everyDays.toInt()),
+            startsOn = LocalDate.parse(fields.requiredString(StartsOnField)),
+            endsOnInclusive = fields.optionalString(EndsOnInclusiveField)?.let(LocalDate::parse),
+            recordedAt =
+                MemberActionMoment(
+                    instant =
+                        Instant.ofEpochMilli(fields.requiredLong(RecordedAtInstantMillisField)),
+                    localDate = LocalDate.parse(fields.requiredString(RecordedAtLocalDateField)),
+                    zoneId = ZoneId.of(fields.requiredString(RecordedAtZoneIdentifierField)),
+                ),
+        )
+    }
+}
+
+private fun List<OccurrenceSubtaskState>.encodeOccurrenceSubtasks(): List<Map<String, Any>> =
+    map { subtask ->
+        mapOf(
+            SubtaskIdentifierField to subtask.identifier.value,
+            SubtaskCheckedField to subtask.isChecked,
+        )
+    }
+
+private fun List<Map<String, Any>>.decodeOccurrenceSubtasks(): List<OccurrenceSubtaskState> =
+    map { subtask ->
+        OccurrenceSubtaskState(
+            identifier = SubtaskIdentifier(subtask.requiredString(SubtaskIdentifierField)),
+            isChecked = subtask.requiredBoolean(SubtaskCheckedField),
+        )
+    }
 
 internal object FirestoreRecurringSeriesCodec {
     fun encode(creation: RecurringSeriesCreation): FirestoreRecurringSeriesDocuments {
@@ -797,6 +1082,27 @@ private fun Map<String, Any>.requiredMapList(field: String): List<Map<String, An
         }
         ?: error("Firestore Task field '$field' must be a list")
 
+private fun Map<String, Any>.requiredMap(field: String): Map<String, Any> {
+    val map = this[field] as? Map<*, *>
+        ?: error("Firestore Task field '$field' must be a map")
+    return map.entries.associate { (key, nestedValue) ->
+        val stringKey = key as? String
+            ?: error("Firestore Task field '$field' map keys must be Strings")
+        stringKey to
+            (nestedValue
+                ?: error("Firestore Task field '$field' map values must not be null"))
+    }
+}
+
+private fun Map<String, Any>.requiredStringList(field: String): List<String> =
+    (this[field] as? List<*>)
+        ?.map { value ->
+            (value as? String)
+                ?.takeIf(String::isNotBlank)
+                ?: error("Firestore Task field '$field' must contain non-blank Strings")
+        }
+        ?: error("Firestore Task field '$field' must be a list")
+
 private fun Map<String, Any>.requiredBoolean(field: String): Boolean =
     this[field] as? Boolean
         ?: error("Firestore Task field '$field' must be a Boolean")
@@ -813,6 +1119,7 @@ private fun Map<String, Any>.requiredLong(field: String): Long =
 private const val UsersCollection = "users"
 private const val TasksCollection = "tasks"
 private const val RevisionsCollection = "revisions"
+private const val OccurrenceStatesCollection = "occurrenceStates"
 private const val TaskRemindersCollection = "taskReminders"
 
 private const val SchemaVersionField = "schemaVersion"
@@ -847,4 +1154,18 @@ private const val RecordedAtZoneIdentifierField = "recordedAtZoneId"
 private const val ReminderDateField = "date"
 private const val ReminderLocalTimeField = "localTime"
 private const val ReminderZoneIdentifierField = "zoneId"
+private const val NominalDateField = "nominalDate"
+private const val OccurrenceSubtasksField = "subtasks"
+private const val SubtaskCheckedField = "isChecked"
+private const val OutcomeKindField = "outcome"
+private const val ActionableOutcomeKind = "ACTIONABLE"
+private const val CompleteOutcomeKind = "COMPLETE"
+private const val CompletionEpochField = "completionEpoch"
+private const val InvalidatedCompletionEpochsField = "invalidatedCompletionEpochs"
+private const val CompletedAtInstantMillisField = "completedAtInstantMillis"
+private const val CompletedAtLocalDateField = "completedAtLocalDate"
+private const val CompletedAtZoneIdentifierField = "completedAtZoneId"
+private const val DefinitionSnapshotField = "definitionSnapshot"
+private const val ActionableSubtasksBeforeCompletionField =
+    "actionableSubtasksBeforeCompletion"
 private const val FirestoreTaskRepositoryLogTag = "DuitTaskRepository"

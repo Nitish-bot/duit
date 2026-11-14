@@ -3,6 +3,7 @@ package com.gaylord.duit.workspace
 import com.gaylord.duit.data.repository.TaskRepository
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.model.OccurrenceKey
+import com.gaylord.duit.domain.model.OccurrenceState
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
 import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
@@ -1118,6 +1119,8 @@ private class AccessTestTaskRepository : TaskRepository {
         MutableStateFlow<Map<TaskIdentifier, StandaloneTaskCreation>>(emptyMap())
     private val recurringCreations =
         MutableStateFlow<Map<TaskIdentifier, RecurringSeriesCreation>>(emptyMap())
+    private val occurrenceStates =
+        MutableStateFlow<Map<OccurrenceKey, OccurrenceState>>(emptyMap())
 
     override suspend fun putStandaloneTaskIfAbsent(
         creation: StandaloneTaskCreation,
@@ -1172,6 +1175,47 @@ private class AccessTestTaskRepository : TaskRepository {
     ): Flow<RecurringSeriesCreation?> =
         recurringCreations.map { stored ->
             stored[taskIdentifier]?.takeIf { it.series.ownerIdentifier == ownerIdentifier }
+        }
+
+    override suspend fun putOccurrenceState(
+        ownerIdentifier: MemberIdentifier,
+        state: OccurrenceState,
+    ): OccurrenceState {
+        check(
+            recurringCreations.value[state.key.taskIdentifier]
+                ?.series
+                ?.ownerIdentifier == ownerIdentifier,
+        ) { "Occurrence State owner does not own its Recurring Series" }
+        occurrenceStates.value = occurrenceStates.value + (state.key to state)
+        return state
+    }
+
+    override fun observeOccurrenceState(
+        ownerIdentifier: MemberIdentifier,
+        occurrenceKey: OccurrenceKey,
+    ): Flow<OccurrenceState?> =
+        occurrenceStates.map { stored ->
+            stored[occurrenceKey]?.takeIf {
+                recurringCreations.value[occurrenceKey.taskIdentifier]
+                    ?.series
+                    ?.ownerIdentifier == ownerIdentifier
+            }
+        }
+
+    override fun observeOccurrenceStates(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+    ): Flow<List<OccurrenceState>> =
+        occurrenceStates.map { stored ->
+            if (
+                recurringCreations.value[taskIdentifier]
+                    ?.series
+                    ?.ownerIdentifier != ownerIdentifier
+            ) {
+                emptyList()
+            } else {
+                stored.values.filter { it.key.taskIdentifier == taskIdentifier }
+            }
         }
 }
 

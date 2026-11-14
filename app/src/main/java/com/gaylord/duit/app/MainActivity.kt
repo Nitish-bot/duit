@@ -5,26 +5,25 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.gaylord.duit.R
 import com.gaylord.duit.app.runtime.createRuntimeWorkspace
 import com.gaylord.duit.app.runtime.runtimeWorkspaceSessionScope
+import com.gaylord.duit.feature.tasks.TasksEffect
+import com.gaylord.duit.feature.tasks.TasksViewModel
+import com.gaylord.duit.feature.today.TodayEffect
+import com.gaylord.duit.feature.today.TodayViewModel
 import com.gaylord.duit.platform.firebase.FirebaseRuntime
 import com.gaylord.duit.platform.firebase.FirebaseRuntimeFactory
 import com.gaylord.duit.platform.firebase.FirebaseSignInFailure
 import com.gaylord.duit.platform.firebase.FirebaseSignInOutcome
-import com.gaylord.duit.workspace.CommandIdentifier
 import com.gaylord.duit.workspace.DuitWorkspace
-import com.gaylord.duit.workspace.MemberCommand
-import com.gaylord.duit.workspace.PersonalAgenda
 import com.gaylord.duit.workspace.WorkspaceAccessAction
-import com.gaylord.duit.workspace.WorkspaceCapabilityUnavailableException
-import com.gaylord.duit.workspace.WorkspaceLockedException
-import java.time.LocalDate
-import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -32,6 +31,8 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var firebaseRuntime: FirebaseRuntime
     private lateinit var workspace: DuitWorkspace
+    private lateinit var todayViewModel: TodayViewModel
+    private lateinit var tasksViewModel: TasksViewModel
     private var workspaceActionJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,21 +41,52 @@ class MainActivity : ComponentActivity() {
 
         firebaseRuntime = FirebaseRuntimeFactory.create(applicationContext)
         workspace = createRuntimeWorkspace(firebaseRuntime)
+        todayViewModel =
+            ViewModelProvider(
+                this,
+                TodayViewModel.Factory(workspace),
+            )[TodayViewModel::class.java]
+        tasksViewModel =
+            ViewModelProvider(
+                this,
+                TasksViewModel.Factory(workspace),
+            )[TasksViewModel::class.java]
 
         setContent {
-            val accessState by workspace.accessState.collectAsState()
-            val agendaFlow = remember(workspace) { workspace.observePersonalAgenda() }
-            val personalAgenda by agendaFlow.collectAsState(
-                initial = PersonalAgenda(date = LocalDate.now(), tasks = emptyList()),
-            )
+            val accessState by workspace.accessState.collectAsStateWithLifecycle()
+            val todayState by todayViewModel.state.collectAsStateWithLifecycle()
+            val tasksState by tasksViewModel.state.collectAsStateWithLifecycle()
 
             DuitApp(
                 accessState = accessState,
                 onAccessAction = ::handleAccessAction,
-                personalAgenda = personalAgenda,
-                onAddPrivateTaskToToday = ::addPrivateTaskToToday,
-                onAddPrivateDailyTaskToToday = ::addPrivateDailyTaskToToday,
+                todayState = todayState,
+                onTodayEvent = todayViewModel::onEvent,
+                tasksState = tasksState,
+                onTasksEvent = tasksViewModel::onEvent,
             )
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                todayViewModel.effects.collect { effect ->
+                    when (effect) {
+                        TodayEffect.WorkspaceActionFailed -> showWorkspaceActionFailure()
+                        TodayEffect.CorrectionBecameStale -> showStaleCorrection()
+                    }
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                tasksViewModel.effects.collect { effect ->
+                    when (effect) {
+                        TasksEffect.WorkspaceActionFailed -> showWorkspaceActionFailure()
+                        TasksEffect.CorrectionBecameStale -> showStaleCorrection()
+                    }
+                }
+            }
         }
 
         workspaceActionJob = lifecycleScope.launch { workspace.restoreSession() }
@@ -84,63 +116,6 @@ class MainActivity : ComponentActivity() {
             }
     }
 
-    private fun addPrivateTaskToToday(
-        commandIdentifier: CommandIdentifier,
-        title: String,
-        onResult: (Boolean) -> Unit,
-    ) = submitTaskCreation(
-        command =
-            MemberCommand.AddPrivateTaskToToday(
-                commandIdentifier = commandIdentifier,
-                title = title,
-            ),
-        onResult = onResult,
-    )
-
-    private fun addPrivateDailyTaskToToday(
-        commandIdentifier: CommandIdentifier,
-        title: String,
-        subtask: String?,
-        onResult: (Boolean) -> Unit,
-    ) = submitTaskCreation(
-        command =
-            MemberCommand.AddPrivateDailyTaskToToday(
-                commandIdentifier = commandIdentifier,
-                title = title,
-                subtask = subtask,
-            ),
-        onResult = onResult,
-    )
-
-    private fun submitTaskCreation(
-        command: MemberCommand,
-        onResult: (Boolean) -> Unit,
-    ) {
-        if (workspaceActionJob?.isActive == true) {
-            onResult(false)
-            return
-        }
-
-        workspaceActionJob =
-            lifecycleScope.launch {
-                try {
-                    workspace.execute(command)
-                    onResult(true)
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (_: WorkspaceLockedException) {
-                    onResult(false)
-                    showTaskCreationFailure()
-                } catch (_: WorkspaceCapabilityUnavailableException) {
-                    onResult(false)
-                    showTaskCreationFailure()
-                } catch (_: Exception) {
-                    onResult(false)
-                    showTaskCreationFailure()
-                }
-            }
-    }
-
     private suspend fun signIn() {
         when (val outcome = firebaseRuntime.signIn(this)) {
             is FirebaseSignInOutcome.SignedIn -> workspace.restoreSession()
@@ -165,7 +140,11 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
-    private fun showTaskCreationFailure() {
-        Toast.makeText(this, R.string.task_creation_failed, Toast.LENGTH_LONG).show()
+    private fun showWorkspaceActionFailure() {
+        Toast.makeText(this, R.string.workspace_action_failed, Toast.LENGTH_LONG).show()
+    }
+
+    private fun showStaleCorrection() {
+        Toast.makeText(this, R.string.completion_correction_stale, Toast.LENGTH_LONG).show()
     }
 }

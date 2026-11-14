@@ -25,6 +25,13 @@ data class OccurrenceKey(
     val nominalDate: LocalDate,
 )
 
+@JvmInline
+value class CompletionEpoch(val value: String) {
+    init {
+        require(value.isNotBlank()) { "Completion Epoch must not be blank" }
+    }
+}
+
 sealed interface TaskVisibility {
     data object Private : TaskVisibility
 }
@@ -123,5 +130,114 @@ data class RecurringSeriesCreation(
     init {
         require(series.identifier == initialRevision.taskIdentifier)
         require(series.activeRevisionIdentifier == initialRevision.identifier)
+    }
+}
+
+data class OccurrenceSubtaskState(
+    val identifier: SubtaskIdentifier,
+    val isChecked: Boolean,
+)
+
+data class OccurrenceSnapshot(
+    val seriesRevision: SeriesRevision,
+    val nominalDate: LocalDate,
+    val effectiveDate: LocalDate,
+)
+
+data class CompletionRecord(
+    val epoch: CompletionEpoch,
+    val snapshot: OccurrenceSnapshot,
+    val completedAt: MemberActionMoment,
+    val subtasks: List<OccurrenceSubtaskState>,
+) {
+    val seriesRevision: SeriesRevision
+        get() = snapshot.seriesRevision
+
+    val nominalDate: LocalDate
+        get() = snapshot.nominalDate
+
+    val effectiveDate: LocalDate
+        get() = snapshot.effectiveDate
+
+    init {
+        require(subtasks.map(OccurrenceSubtaskState::identifier).toSet().size == subtasks.size) {
+            "Completion Record Subtask identifiers must be unique"
+        }
+        require(
+            subtasks.map(OccurrenceSubtaskState::identifier).toSet() ==
+                seriesRevision.subtaskTemplate.map(SubtaskTemplate::identifier).toSet(),
+        ) {
+            "Completion Record Subtasks must match its historical Series Revision"
+        }
+    }
+}
+
+sealed interface OccurrenceOutcome {
+    data class Complete(
+        val record: CompletionRecord,
+    ) : OccurrenceOutcome
+}
+
+/**
+ * One whole-document, last-write-wins record for an Occurrence the Owner has interacted with.
+ * Expected Occurrences with no interaction have no persisted state.
+ */
+data class OccurrenceState(
+    val key: OccurrenceKey,
+    val snapshot: OccurrenceSnapshot,
+    val subtasks: List<OccurrenceSubtaskState>,
+    val outcome: OccurrenceOutcome?,
+    val actionableSubtasksBeforeCompletion: List<OccurrenceSubtaskState>? = null,
+    val invalidatedCompletionEpochs: Set<CompletionEpoch> = emptySet(),
+) {
+    init {
+        require(snapshot.seriesRevision.taskIdentifier == key.taskIdentifier) {
+            "Occurrence snapshot belongs to another Task"
+        }
+        require(snapshot.nominalDate == key.nominalDate) {
+            "Occurrence snapshot belongs to another Occurrence"
+        }
+        require(
+            subtasks.map(OccurrenceSubtaskState::identifier).toSet() ==
+                snapshot.seriesRevision.subtaskTemplate.map(SubtaskTemplate::identifier).toSet(),
+        ) {
+            "Occurrence State Subtasks must match its historical definition"
+        }
+        require(subtasks.map(OccurrenceSubtaskState::identifier).toSet().size == subtasks.size) {
+            "Occurrence State Subtask identifiers must be unique"
+        }
+        (outcome as? OccurrenceOutcome.Complete)?.record?.let { completion ->
+            require(completion.snapshot == snapshot) {
+                "Completion Record must use the Occurrence snapshot"
+            }
+            require(completion.subtasks == subtasks) {
+                "Completed Occurrence State must match its Completion Record Subtasks"
+            }
+            require(actionableSubtasksBeforeCompletion != null) {
+                "Completed Occurrence State must retain its actionable state for immediate Undo"
+            }
+            require(completion.epoch !in invalidatedCompletionEpochs) {
+                "The current Completion Epoch must not already be invalidated"
+            }
+        }
+        require(outcome is OccurrenceOutcome.Complete || actionableSubtasksBeforeCompletion == null) {
+            "Only a completed Occurrence State may retain immediate Undo state"
+        }
+        actionableSubtasksBeforeCompletion?.let { actionableSubtasks ->
+            require(
+                actionableSubtasks.map(OccurrenceSubtaskState::identifier).toSet() ==
+                    snapshot.seriesRevision.subtaskTemplate
+                        .map(SubtaskTemplate::identifier)
+                        .toSet(),
+            ) {
+                "Immediate Undo Subtasks must match the historical definition"
+            }
+            require(
+                actionableSubtasks.map(OccurrenceSubtaskState::identifier).toSet().size ==
+                    actionableSubtasks.size,
+            ) {
+                "Immediate Undo Subtask identifiers must be unique"
+            }
+        }
     }
 }

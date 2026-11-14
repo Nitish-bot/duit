@@ -1,6 +1,8 @@
 package com.gaylord.duit.data.repository
 
 import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.OccurrenceKey
+import com.gaylord.duit.domain.model.OccurrenceState
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
 import com.gaylord.duit.domain.model.TaskIdentifier
@@ -48,4 +50,23 @@ interface TaskRepository {
         ownerIdentifier: MemberIdentifier,
         taskIdentifier: TaskIdentifier,
     ): Flow<RecurringSeriesCreation?>
+
+    /**
+     * Replaces one interacted Occurrence State as a whole document. Expected Occurrences with no
+     * interaction are derived from their Series and have no stored state.
+     */
+    suspend fun putOccurrenceState(
+        ownerIdentifier: MemberIdentifier,
+        state: OccurrenceState,
+    ): OccurrenceState
+
+    fun observeOccurrenceState(
+        ownerIdentifier: MemberIdentifier,
+        occurrenceKey: OccurrenceKey,
+    ): Flow<OccurrenceState?>
+
+    fun observeOccurrenceStates(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+    ): Flow<List<OccurrenceState>>
 }
