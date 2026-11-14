@@ -249,7 +249,6 @@ private val ServerAuthoredFunctionCodeNames =
         "PERMISSION_DENIED",
         "RESOURCE_EXHAUSTED",
         "ALREADY_EXISTS",
-        "NOT_FOUND",
         "ABORTED",
         "OUT_OF_RANGE",
     )

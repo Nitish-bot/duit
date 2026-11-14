@@ -207,7 +207,6 @@ class FirebaseFunctionsPairingGatewayTest {
             "PERMISSION_DENIED",
             "RESOURCE_EXHAUSTED",
             "ALREADY_EXISTS",
-            "NOT_FOUND",
             "ABORTED",
             "OUT_OF_RANGE",
         ).forEach { codeName ->
@@ -224,8 +223,8 @@ class FirebaseFunctionsPairingGatewayTest {
     }
 
     @Test
-    fun `raw SDK failures never forward their text`() {
-        listOf("INTERNAL", "UNKNOWN", "UNAUTHENTICATED", "DATA_LOSS", "CANCELLED").forEach { codeName ->
+    fun `raw SDK failures and an undeployed Pairing backend show no raw text`() {
+        listOf("INTERNAL", "UNKNOWN", "UNAUTHENTICATED", "DATA_LOSS", "CANCELLED", "NOT_FOUND").forEach { codeName ->
             assertEquals(
                 codeName,
                 PairingCallFailure.Recoverable(null),
