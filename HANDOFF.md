@@ -1,6 +1,6 @@
 # Duit implementation handoff
 
-Snapshot date: 2026-08-11 (Asia/Kolkata)
+Snapshot date: 2026-11-14 (Asia/Kolkata)
 
 This document is for a fresh implementation chat continuing the GitHub issue backlog. Verify the snapshot commands below before editing because GitHub Issues remain the specification and dependency source of truth.
 
@@ -19,13 +19,16 @@ The user does not currently need to verify anything before work resumes. Stop fo
 - Repository: `Nitish-bot/duit`
 - Workspace: use the repository root supplied by the current Codex task.
 - Branch: `main`
-- Implementation baseline: `fdd68bb9077ecaf431b3e64a0beeec2c7a961a45`
-- The implementation worktree was clean at the baseline above. This handoff and its README correction are the intended subsequent documentation commit.
+- Implementation baseline: `6a8cbe5d8580a19cad581225ac42d98bcc136ab5`
+- The implementation worktree was clean at the baseline above. This handoff refresh is the intended subsequent documentation commit.
 - `main` says `[origin/main: gone]`; do not assume these commits exist remotely. Inspect the remote before pushing, and do not push unless the user asks.
 
 Recent commits, newest first:
 
 ```text
+6a8cbe5 feat: form an optional Pair from Together (#7)
+0fc5c01 feat: complete, undo, and correct Daily Occurrences (#6)
+eaa29cc docs: add implementation handoff
 fdd68bb test: align Pairing fixture terminology (#7)
 a1c930a refactor: align Pairing domain terminology (#7)
 b515902 feat: add transactional Pairing backend core (#7)
@@ -38,8 +41,9 @@ b515902 feat: add transactional Pairing backend core (#7)
 Tracker state:
 
 - Closed: #2, #3, #4, #5.
-- Open and dependency-unblocked: #6 and #7 only.
-- #7 is partially implemented; its backend core and evidence are in the commits above and in the issue discussion.
+- #6 is implemented and committed but left open pending the physical-device Firestore repository harness and a connected UI run; no phone was attached on 2026-11-14.
+- #7 Android half and the development Functions entry are committed but left open pending a development deploy (needs Blaze billing on the development project), App Check debug-token registration, and two-account device acceptance.
+- Dependency-unblocked next: #9 (after #6). #8 needs #6 and #7.
 - #1 remains the open umbrella.
 - #35 and #36 are human-owned. #34 and all production work are outside the current dev-only authorization.
 
@@ -86,7 +90,15 @@ Relevant files:
 - `app/src/dev/java/com/gaylord/duit/platform/firebase/FirestoreTaskRepository.kt`
 - `app/src/main/java/com/gaylord/duit/feature/today/TodayScreen.kt`
 
-### Pairing backend core (#7 partial)
+### Daily Occurrence outcomes (#6)
+
+- Complete, Undo, and correct are `DuitWorkspace` commands.
+- Interacted state is one whole-document Occurrence State under the Task's `occurrenceStates/{nominalDate}`.
+- Correction preserves the Completion Epoch; leaving Complete invalidates it, and completing again creates a distinct epoch.
+- Future Nominal Dates and future completion times are rejected.
+- Today and Tasks are driven by `TodayViewModel` and `TasksViewModel`.
+
+### Pairing (#7, awaiting device acceptance)
 
 Shared implementation: `functions/src/pairing.ts`
 
@@ -113,51 +125,23 @@ Implemented guarantees:
 
 Server-only collections are `/pairs`, `/pairMemberships`, `/pairInvites`, and `/inviteRateLimits`. Firestore Rules intentionally deny clients direct access. Do not make pending Pair documents client-readable; `getPairingStatus` is the participant-scoped identity/status seam.
 
+Android and development deployment pieces:
+
+- Android gateway and `PairCommand` handling in `DuitWorkspace`, kept orthogonal to workspace access.
+- `TogetherViewModel` and `TogetherScreen` cover the full Together state set with lifecycle-bound polling.
+- Dev-only Functions client and App Check debug provider (dev flavor only).
+- `functions/development` and `firebase.development.json` deploy Functions only; Firestore Rules for every environment remain the approval-gated `firestore.rules`.
+- Partner identity is taken from the Google provider record, not editable profile claims.
+
 `functions/emulator/src/index.ts` exports the callables with App Check disabled because Firebase has no App Check emulator. `functions/src/index.ts` is intentionally empty, and the production-boundary tests require it to stay that way until a deliberate deploy boundary exists.
 
 ## Immediate next work
 
-Run #6 and the remainder of #7 in parallel where ownership is clear. They are the only dependency-unblocked issues.
+1. Human steps to finish #7: enable Blaze on the development project, deploy with the README's "Development Functions and App Check" command, register the App Check debug token for the development installation, then run the two-account drill (create, enter, mutual identity review, both confirmations, active Together on both phones, rejection paths).
+2. Finish #6: attach the phone and run `./gradlew :app:connectedDevDebugAndroidTest` and `npm --prefix functions run test:android-repository`. The latter needs `DUIT_ANDROID_REPOSITORY_ALLOW_DEV_APP_RESET=1` if the dev app is installed.
+3. Start #9.
 
-### Issue #6: Complete, Undo, and correct a Daily Occurrence
-
-Suggested tracer-bullet order:
-
-1. Add pure domain types for interacted Occurrence State, mutually exclusive outcome, immutable Completion Record snapshot, and Completion Epoch.
-2. Drive commands through `DuitWorkspace`: Complete, immediate Undo, and direct correction.
-3. Persist only interacted state, likely under the Owner Task's `occurrenceStates/{nominalDate}` child keyed by the stable Occurrence identity. Keep it one whole document so outcome/subtask correction is atomic and follows ADR-0003.
-4. On first transition into Complete, snapshot the historical Series definition, Nominal Date, Effective Date, completion instant/local date/zone, and Subtask state.
-5. Corrections may change only outcome, completion time, and checked Subtask state. They must preserve the historical definition/dates and the current Completion Epoch.
-6. Leaving Complete invalidates that epoch; completing again creates a distinct epoch while retaining one current truthful outcome.
-7. Add Today feedback, Done today, immediate Undo, and later history correction UI.
-8. Prove offline immediacy, replay, reconstruction, reconnect, no duplicate history, and no change to future Subtask state.
-
-Test first at `DuitWorkspace` with an injected clock/zone and deterministic in-memory repository. Add Firestore Android-emulator conformance only after the domain behavior is green.
-
-### Issue #7: finish Android Pairing and dev deployment
-
-Backend behavior is already implemented. Do not rewrite it into a general API.
-
-1. Add a narrow Pairing domain/gateway boundary. Keep Pairing state orthogonal to `WorkspaceAccessState.Ready`; a callable/network failure must never lock or discard an already hydrated Owner workspace.
-2. Add the Firebase Functions Android dependency and a dev adapter using the named `FirebaseApp` created by `FirebaseRuntimeFactory` (`duit-development`), not the default app.
-3. Model Together states: unpaired/create invite, enter invite, Partner identity review, waiting for the other confirmation, active Pair, connectivity-required failure, and recoverable error.
-4. Wire `TogetherScreen` through state and callbacks; it is currently a static empty page.
-5. Call `getPairingStatus` when Together opens and before enabling create/accept actions so an expired pending Pair releases stale locks. Continue refreshing while confirmation is pending so each phone transitions after the second confirmation. Keep polling lifecycle-aware and bounded/backed off.
-6. Map `UNAVAILABLE`/offline callable failures to explicit Together-only copy explaining that Pairing requires a connection. Personal Tasks must remain usable.
-7. Add domain and Compose tests before real cloud acceptance.
-8. Create a distinct development deployment entry/configuration that exports `createPairingCallables({ enforceAppCheck: true })` only for the dev project. Do not export them from `functions/src/index.ts` or use the production `firebase.json` casually.
-9. Configure the App Check debug provider only in the dev flavor and register the debug token in the development project before enforcing it.
-10. Run two-device or multi-account acceptance for create, enter, mutual identity review, both confirmations, active Together state, rejection paths, and multiple independent Pairs.
-
-Likely human boundary: deploying Cloud Functions may require enabling Blaze billing on the development Firebase project, and enforced App Check requires registering a debug token. Emulator/domain/UI work can proceed first. Ask the user only when one of those external changes becomes necessary. Do not touch production.
-
-### Parallel ownership warning
-
-#6 and #7 can proceed concurrently, but both may touch `DuitWorkspace`, `DuitApp`, `MainActivity`, runtime contracts, Gradle dependencies, and instrumentation configuration. Give sub-agents exclusive areas:
-
-- #6 agent: occurrence domain/repository/Today tests and UI.
-- #7 agent: Pairing domain/Firebase adapter/Together tests and UI.
-- Root/integrator: shared application composition, build files, emulator configuration, and final tests.
+Decision note: development self-admission was drafted and deliberately dropped on 2026-11-14. Member Approval stays administrator-created in every environment (ADR-0006). If `firestore.development.rules` was ever deployed to the development project, redeploy `firestore.rules` with `firebase.json`.
 
 Run Firebase emulator suites serially. The normal Functions suite and dedicated Android repository harness contend for hub/websocket ports even though the repository Firestore instance uses port 8081.
 
@@ -199,8 +183,8 @@ Local tools:
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools
-export PATH="$ANDROID_HOME/platform-tools:$PATH"
-nvm use # repository pins Node 22; the ambient shell was Node 24.16.0
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH" # the emulator suite needs JDK 21 on PATH
+source ~/.nvm/nvm.sh && nvm use system # Node 22; plain `nvm use` fails on this machine
 ```
 
 Physical phone at handoff:
@@ -233,7 +217,7 @@ Broad Android gate used after #5:
   :app:compileProdDebugAndroidTestKotlin
 ```
 
-Last result: `BUILD SUCCESSFUL`, 182 tasks.
+Last result (2026-11-14): `BUILD SUCCESSFUL`, 182 tasks, 87 devDebug unit tests, 0 failures.
 
 Connected UI:
 
@@ -241,7 +225,7 @@ Connected UI:
 ./gradlew :app:connectedDevDebugAndroidTest
 ```
 
-Last result: 17 passed; the five repository-only tests skipped as intended.
+Last known result (before #6 and #7): 17 passed; the five repository-only tests skipped as intended. NOT run on 2026-11-14.
 
 Physical-device Firestore repository conformance:
 
@@ -249,7 +233,7 @@ Physical-device Firestore repository conformance:
 npm --prefix functions run test:android-repository
 ```
 
-Last result: 5/5, including offline creation, termination, cleared persistent cache, server hydration, and repository reconstruction.
+Last known result (before #6 and #7): 5/5, including offline creation, termination, cleared persistent cache, server hydration, and repository reconstruction. NOT run on 2026-11-14.
 
 Functions and Rules:
 
@@ -258,7 +242,7 @@ npm --prefix functions run typecheck
 npm --prefix functions test
 ```
 
-Last result: typecheck/build passed, production boundary 2/2, Auth + Functions + Firestore emulator suite 26/26. The final subsequent commit renamed test fixtures only and passed `node --check`.
+Last result (2026-11-14): typecheck passed, boundary tests 9/9, Auth + Functions + Firestore emulator suite 28/28. Connected and physical-device suites were NOT run on 2026-11-14.
 
 The Functions emulator suite uses ports 5001/8080/9099 plus hub/logging/websocket ports 4400/4500/9150. Do not run it concurrently with another Firebase emulator harness.
 
@@ -269,6 +253,9 @@ The final review found no remaining hard standards violations. It recorded three
 - `AgendaTask` represents Standalone and Recurring variants using coupled nullable fields. A sealed variant model would make invalid combinations unrepresentable.
 - The Daily creation callback tuple is threaded through `TodayScreen`, `DuitShell`, `DuitApp`, and `MainActivity`; a small task-creation action/request boundary could reduce shotgun edits.
 - `FirestoreTaskRepository` duplicates some standalone/recurring listener and cache-read structure; extract only if the helper remains domain-readable.
+- Correcting a past completion to "not done" leaves that Occurrence with no screen to complete it again until Needs a Decision (#19) exists.
+- `DuitWorkspace.pairingStatus` has no production consumer yet.
+- The in-memory `TaskRepository` test double is duplicated across four test files.
 
 ## Completion discipline
 
