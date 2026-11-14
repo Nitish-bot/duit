@@ -442,6 +442,8 @@ async function ensureDevAppResetIsAllowed(devices) {
       adb,
       ["-s", serial, "shell", "pm", "path", targetPackages[0]],
       {
+        // `pm path` exits non-zero with no output when the package is absent.
+        allowFailure: true,
         captureOutput: true,
         timeoutMillis: adbCommandTimeoutMillis,
       },
