@@ -195,6 +195,7 @@ test("a Pair activates atomically only after both Members explicitly confirm", a
     pairId: accepted.pairId,
     partnerConfirmed: true,
     partnerIdentity: { displayName: "Alice Example", photoUrl: null },
+    partnerUid: alice.uid,
     selfConfirmed: true,
     state: "ACTIVE",
   });
@@ -213,6 +214,7 @@ test("a Pair activates atomically only after both Members explicitly confirm", a
     pairId: accepted.pairId,
     partnerConfirmed: true,
     partnerIdentity: { displayName: "Bob Example", photoUrl: null },
+    partnerUid: bob.uid,
     selfConfirmed: true,
     state: "ACTIVE",
   });

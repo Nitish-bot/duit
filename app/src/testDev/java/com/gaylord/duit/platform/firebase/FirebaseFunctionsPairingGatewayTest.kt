@@ -1,6 +1,7 @@
 package com.gaylord.duit.platform.firebase
 
 import com.gaylord.duit.domain.pairing.PairInvite
+import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.pairing.PairIdentifier
 import com.gaylord.duit.domain.pairing.PairingStatus
 import com.gaylord.duit.domain.pairing.PartnerIdentity
@@ -108,6 +109,7 @@ class FirebaseFunctionsPairingGatewayTest {
                             "pairId" to "pair-alex-sam",
                             "partnerConfirmed" to true,
                             "partnerIdentity" to partnerIdentity,
+                            "partnerUid" to "uid-sam",
                             "selfConfirmed" to true,
                             "state" to "ACTIVE",
                         ),
@@ -139,6 +141,7 @@ class FirebaseFunctionsPairingGatewayTest {
                                 "Sam Rivera",
                                 "https://lh3.googleusercontent.com/a/sam",
                             ),
+                            partnerIdentifier = MemberIdentifier("uid-sam"),
                         ),
                     ),
                 ),

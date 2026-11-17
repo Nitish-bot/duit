@@ -1,5 +1,7 @@
 package com.gaylord.duit.domain.pairing
 
+import com.gaylord.duit.domain.model.MemberIdentifier
+
 @JvmInline
 value class PairIdentifier(val value: String)
 
@@ -26,5 +28,7 @@ sealed interface PairingStatus {
     data class Active(
         val pairIdentifier: PairIdentifier,
         val partnerIdentity: PartnerIdentity,
+        /** The Partner's Member identifier; null until the Pairing backend reports it. */
+        val partnerIdentifier: MemberIdentifier? = null,
     ) : PairingStatus
 }

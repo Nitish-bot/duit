@@ -1,6 +1,7 @@
 package com.gaylord.duit.platform.firebase
 
 import com.gaylord.duit.domain.pairing.PairInvite
+import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.pairing.PairIdentifier
 import com.gaylord.duit.domain.pairing.PairingStatus
 import com.gaylord.duit.domain.pairing.PartnerIdentity
@@ -216,6 +217,11 @@ private fun decodePairingStatus(response: Any?): PairingStatus {
             PairingStatus.Active(
                 pairIdentifier = PairIdentifier(fields.nonBlankString("pairId")),
                 partnerIdentity = fields.partnerIdentity(),
+                partnerIdentifier =
+                    (fields["partnerUid"] as? String)
+                        ?.trim()
+                        ?.takeIf(String::isNotEmpty)
+                        ?.let(::MemberIdentifier),
             )
         else -> invalidPairingResponse()
     }

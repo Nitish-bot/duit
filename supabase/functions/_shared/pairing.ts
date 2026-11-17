@@ -322,6 +322,7 @@ async function getPairingStatus(
       pairId,
       partnerConfirmed: partner.confirmed,
       partnerIdentity: partner.identity,
+      ...(pairData.state === "ACTIVE" ? { partnerUid: partner.uid } : {}),
       selfConfirmed: self.confirmed,
       state: pairData.state,
     };
@@ -772,6 +773,9 @@ function pairingStatus(
     pairId,
     partnerConfirmed: partner.confirmed,
     partnerIdentity: partner.identity,
+    // Only an active Pair needs the Partner's Member identifier: the Owner names it when
+    // publishing a Shared View so Firestore Rules can bind the grant to the current Pair.
+    ...(state === "ACTIVE" ? { partnerUid: partner.uid } : {}),
     selfConfirmed: self.confirmed,
     state,
   };
