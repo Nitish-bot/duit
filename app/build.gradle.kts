@@ -1,4 +1,5 @@
 import groovy.json.JsonSlurper
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 val DevelopmentApplicationId = "com.gaylord.duit.dev"
@@ -73,6 +74,33 @@ private fun loadDevelopmentFirebaseConfiguration(
     }
 }
 
+// Optional Pairing backend (a Supabase Edge Function). Read from the ignored
+// local.properties as `duit.pairingBackendUrl`, or from -Pduit.pairingBackendUrl. Empty means
+// Pairing reports an unavailable backend. The value is never printed.
+private val PairingBackendPathSuffix = "/functions/v1/pairing"
+private val LocalPairingBackendHosts = listOf("10.0.2.2", "127.0.0.1", "localhost")
+
+private fun validatedPairingBackendUrl(configured: String): String {
+    val url = configured.trim().trimEnd('/')
+    if (url.isEmpty()) return ""
+    val secure = url.startsWith("https://") && url.removePrefix("https://").isNotBlank()
+    val local =
+        LocalPairingBackendHosts.any { host ->
+            url == "http://$host" ||
+                url.startsWith("http://$host/") ||
+                url.startsWith("http://$host:")
+        }
+    // The App Check-free `pairing-local` function is allowed only on a local address.
+    val pathMatches =
+        url.endsWith(PairingBackendPathSuffix) || (local && url.endsWith("$PairingBackendPathSuffix-local"))
+    check((secure || local) && pathMatches) {
+        "duit.pairingBackendUrl must be https://<host>$PairingBackendPathSuffix " +
+            "(or http://10.0.2.2, 127.0.0.1 or localhost for a local serve); " +
+            "the configured value is not shown. Fix or remove it in local.properties."
+    }
+    return url
+}
+
 private fun String.asBuildConfigString(): String =
     buildString {
         append('"')
@@ -101,6 +129,19 @@ val developmentFirebaseConfigurationFile =
         .getOrElse(file("src/dev/google-services.json"))
 val developmentFirebaseConfiguration =
     loadDevelopmentFirebaseConfiguration(developmentFirebaseConfigurationFile)
+val developmentPairingBackendUrl =
+    validatedPairingBackendUrl(
+        providers.gradleProperty("duit.pairingBackendUrl").orNull
+            ?: file("../local.properties")
+                .takeIf(File::isFile)
+                ?.let { propertiesFile ->
+                    Properties()
+                        .also { properties ->
+                            propertiesFile.bufferedReader().use(properties::load)
+                        }.getProperty("duit.pairingBackendUrl")
+                }
+            ?: "",
+    )
 
 android {
     namespace = "com.gaylord.duit"
@@ -157,6 +198,11 @@ android {
                 "GOOGLE_SERVER_CLIENT_ID",
                 developmentFirebaseConfiguration.googleServerClientId.asBuildConfigString(),
             )
+            buildConfigField(
+                "String",
+                "PAIRING_BACKEND_URL",
+                developmentPairingBackendUrl.asBuildConfigString(),
+            )
         }
         create("prod") {
             dimension = "environment"
@@ -167,6 +213,7 @@ android {
             buildConfigField("String", "FIREBASE_GCM_SENDER_ID", "".asBuildConfigString())
             buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "".asBuildConfigString())
             buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", "".asBuildConfigString())
+            buildConfigField("String", "PAIRING_BACKEND_URL", "".asBuildConfigString())
         }
     }
 

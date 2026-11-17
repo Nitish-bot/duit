@@ -12,22 +12,23 @@ import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.FirebaseFunctionsException
 import java.io.IOException
 import java.net.URI
+import java.net.URL
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.tasks.await
-
-const val PairingFunctionsRegion = "us-central1"
 
 /**
  * Pairing's development callable adapter.
  *
  * The Firebase Functions client is injected so application composition must derive it from the
  * named `duit-development` FirebaseApp. This adapter never looks up the default FirebaseApp.
+ * Calls go to the Pairing backend at [backendUrl] over the Firebase callable protocol; an empty
+ * URL means no backend is configured and every call reports it as unavailable.
  */
 class FirebaseFunctionsPairingGateway internal constructor(
     private val client: PairingCallableClient,
 ) : PairingGateway {
-    constructor(functions: FirebaseFunctions) : this(
-        FirebaseSdkPairingCallableClient(functions),
+    constructor(functions: () -> FirebaseFunctions, backendUrl: String) : this(
+        pairingCallableClient(backendUrl, functions),
     )
 
     override suspend fun getPairingStatus(): PairingCallResult<PairingStatus> =
@@ -91,8 +92,33 @@ internal fun interface PairingCallableClient {
     ): PairingCallResult<Any?>
 }
 
+internal fun pairingCallableClient(
+    backendUrl: String,
+    functions: () -> FirebaseFunctions,
+): PairingCallableClient =
+    if (backendUrl.isBlank()) {
+        UnavailablePairingCallableClient
+    } else {
+        FirebaseSdkPairingCallableClient(functions(), backendUrl)
+    }
+
+internal fun pairingCallableUrl(
+    backendUrl: String,
+    name: String,
+): String = "${backendUrl.trimEnd('/')}/$name"
+
+// Reported like an undeployed backend: the UI shows its generic message, never raw text.
+private object UnavailablePairingCallableClient : PairingCallableClient {
+    override suspend fun call(
+        name: String,
+        data: Map<String, Any?>,
+    ): PairingCallResult<Any?> =
+        PairingCallResult.Failure(PairingCallFailure.Recoverable(null))
+}
+
 private class FirebaseSdkPairingCallableClient(
     private val functions: FirebaseFunctions,
+    private val backendUrl: String,
 ) : PairingCallableClient {
     override suspend fun call(
         name: String,
@@ -100,7 +126,11 @@ private class FirebaseSdkPairingCallableClient(
     ): PairingCallResult<Any?> =
         try {
             PairingCallResult.Success(
-                functions.getHttpsCallable(name).call(data).await().data,
+                functions
+                    .getHttpsCallableFromUrl(URL(pairingCallableUrl(backendUrl, name)))
+                    .call(data)
+                    .await()
+                    .data,
             )
         } catch (error: CancellationException) {
             throw error

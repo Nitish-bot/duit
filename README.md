@@ -91,6 +91,7 @@ Production Firebase is deliberately not required during development. Use a separ
    Add both the SHA-1 and SHA-256 values for the `devDebug` variant to that Firebase Android app. Each developer machine may have a different debug certificate.
 3. Enable Google as a Firebase Authentication sign-in provider and create the development Firestore database.
 4. Download that Android app's `google-services.json` to `app/src/dev/google-services.json`. This path is ignored by Git. Never add a production configuration or point the `prod` flavor at this development project.
+   Optionally add `duit.pairingBackendUrl=https://<project-ref>.supabase.co/functions/v1/pairing` to the ignored `local.properties` (or pass `-Pduit.pairingBackendUrl=...`) to point the `dev` flavor at the Pairing Edge Function; `http://10.0.2.2:54321/functions/v1/pairing-local` works against a local serve. It must be `https://` (or an `http://` 10.0.2.2/127.0.0.1/localhost address) and end in `/functions/v1/pairing` for the deployed function. Leave it unset and Pairing reports an unavailable backend. The `prod` flavor has no Pairing backend.
 5. Sign the Firebase CLI into the Google account that owns only the development project, then deploy just the Firestore Rules. Replace the placeholder with the project ID shown in the development `google-services.json` or Firebase Console:
 
    ```sh

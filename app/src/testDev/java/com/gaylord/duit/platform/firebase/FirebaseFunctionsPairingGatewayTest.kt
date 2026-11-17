@@ -278,6 +278,50 @@ class FirebaseFunctionsPairingGatewayTest {
 
             assertEquals(photos.map { it.second }, decoded)
         }
+
+    @Test
+    fun `callable URLs append each name to the backend URL without doubling slashes`() {
+        val base = "https://abcdefghij.supabase.co/functions/v1/pairing"
+        listOf(base, "$base/", "$base//").forEach { backendUrl ->
+            assertEquals(
+                backendUrl,
+                listOf(
+                    "$base/createPairInvite",
+                    "$base/acceptPairInvite",
+                    "$base/confirmPair",
+                    "$base/getPairingStatus",
+                ),
+                listOf(
+                    "createPairInvite",
+                    "acceptPairInvite",
+                    "confirmPair",
+                    "getPairingStatus",
+                ).map { pairingCallableUrl(backendUrl, it) },
+            )
+        }
+    }
+
+    @Test
+    fun `an empty backend URL makes every Pairing call an unavailable backend`() =
+        runTest {
+            val gateway =
+                FirebaseFunctionsPairingGateway(
+                    pairingCallableClient(backendUrl = "") {
+                        error("Firebase Functions must not be created without a backend URL")
+                    },
+                )
+            val unavailable = PairingCallResult.Failure(PairingCallFailure.Recoverable(null))
+
+            assertEquals(
+                listOf(unavailable, unavailable, unavailable, unavailable),
+                listOf(
+                    gateway.getPairingStatus(),
+                    gateway.createPairInvite(),
+                    gateway.acceptPairInvite("7K3M9P2Q"),
+                    gateway.confirmPair(PairIdentifier("pair-alex-sam")),
+                ),
+            )
+        }
 }
 
 private data class CallableObservation<out Value>(

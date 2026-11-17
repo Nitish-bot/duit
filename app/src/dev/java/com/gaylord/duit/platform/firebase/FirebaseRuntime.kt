@@ -63,7 +63,8 @@ object FirebaseRuntimeFactory {
                     reminders = null,
                     pairing =
                         FirebaseFunctionsPairingGateway(
-                            FirebaseFunctions.getInstance(firebaseApp, PairingFunctionsRegion),
+                            functions = { FirebaseFunctions.getInstance(firebaseApp) },
+                            backendUrl = BuildConfig.PAIRING_BACKEND_URL,
                         ),
                 ),
         )
