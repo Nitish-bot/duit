@@ -46,7 +46,8 @@ Tracker state:
 
 - Closed: #2, #3, #4, #5.
 - #6 is closed. Device evidence: `connectedDevDebugAndroidTest` 39 tests, 0 failed; the Firestore repository harness passed 7/7 twice.
-- #7 stays open but is no longer blocked on Blaze. On 2026-11-17 Pairing moved from Cloud Functions to a Supabase Edge Function on the free plan (ADR-0007; Firestore, Auth, Rules and App Check are unchanged). The code and local tests are done; #7 now waits on the human-owned Supabase and service-account setup (README "Pairing backend (Supabase Edge Function) and App Check"), then the two-phone drill. #8 (blocked by #7) and #10 (Cheer delivery; no Firestore triggers off Cloud Functions, so it becomes a client-invoked edge call, design in #10) follow #7.
+- #7 device acceptance is done (2026-11-17). Pairing moved from Cloud Functions to a Supabase Edge Function on the free plan (ADR-0007; Firestore, Auth, Rules and App Check are unchanged) and is deployed to the dev Supabase project. The two-phone drill passed: an unknown code and accepting one's own invite were refused, and an invite created on the Nothing Phone (4a) was accepted on the OnePlus with mutual confirmation, leaving both phones in an active Pair. Evidence: [issue #7 comment](https://github.com/Nitish-bot/duit/issues/7#issuecomment-6950024642). #7 is still open; closing it is the user's call. #8 (previously blocked by #7) is next; #10 (Cheer delivery; no Firestore triggers off Cloud Functions, so it becomes a client-invoked edge call, design in #10) follows #8.
+- Watch item: Supabase pauses free projects after about a week of low activity. A paused project returns errors until resumed by hand in the dashboard, and Android shows the connection-required state. Check it is awake before any device session, and revisit hosting before production (#34, #36).
 - The dev build was installed on the test phone on 2026-11-15 and launches without a crash; Together was not exercised (no sign-in).
 - Dependency-unblocked next: #9.
 - #1 remains the open umbrella.
@@ -103,9 +104,9 @@ Relevant files:
 - Future Nominal Dates and future completion times are rejected.
 - Today and Tasks are driven by `TodayViewModel` and `TasksViewModel`.
 
-### Pairing (#7, awaiting device acceptance)
+### Pairing (#7, device acceptance done)
 
-Shared implementation: `functions/src/pairing.ts`
+Shared implementation: `supabase/functions/_shared/pairing.ts`
 
 Callable contract in region `us-central1`:
 
@@ -143,7 +144,7 @@ Android and development deployment pieces:
 ## Immediate next work
 
 1. Start #9 (the only dependency-unblocked issue).
-2. #7 waits on the human-owned setup in the README's "Pairing backend (Supabase Edge Function) and App Check": Supabase account and project, `supabase link`, the dedicated service account and `supabase secrets set FIREBASE_SERVICE_ACCOUNT`, `duit.pairingBackendUrl`, and the App Check debug token. Then `supabase functions deploy pairing` and run the two-account drill (create, enter, mutual identity review, both confirmations, active Together on both phones, rejection paths). Until then #8 and #10 stay blocked.
+2. Close #7 if the user agrees (evidence is on the issue), then start #8; #10 follows #8. The setup that made #7 pass is in the README's "Pairing backend (Supabase Edge Function) and App Check": `pairing` is deployed with `supabase functions deploy pairing --use-api`, `FIREBASE_SERVICE_ACCOUNT` is set, `duit.pairingBackendUrl` is in `local.properties`, and App Check debug tokens are registered for both phones (a call with no App Check token returns UNAUTHENTICATED). The dev app is still "Not registered" for Play Integrity; debug tokens work without it.
 
 Decision note: development self-admission was drafted and deliberately dropped on 2026-11-14. Member Approval stays administrator-created in every environment (ADR-0006). If `firestore.development.rules` was ever deployed to the development project, redeploy `firestore.rules` with `firebase.json`.
 
@@ -193,9 +194,9 @@ source ~/.nvm/nvm.sh && nvm use system # Node 22; plain `nvm use` fails on this 
 
 Physical phone at handoff:
 
-- OnePlus DN2101, Android 13
+- OnePlus CPH2467, Android 15 (labelled "OnePlus DN2101" in the Firebase console). A second device, a Nothing Phone (4a, model A069), is also registered for App Check and was used in the two-phone drill.
 - adb executable: `/opt/homebrew/share/android-commandlinetools/platform-tools/adb`
-- Connected and authorized over USB when last checked.
+- Connected and authorized over USB on 2026-11-17.
 - Resolve the current serial with `adb devices -l`; do not commit hardware identifiers.
 - `stay_on_while_plugged_in=7`; **Keep screen on while charging** is sufficient for instrumentation.
 - No stale `adb reverse` mappings remained.
@@ -229,7 +230,7 @@ Connected UI:
 ./gradlew :app:connectedDevDebugAndroidTest
 ```
 
-Last known result (before #6 and #7): 17 passed; the five repository-only tests skipped as intended. NOT run on 2026-11-14.
+Last result (2026-11-17, OnePlus CPH2467): 39 passed, 0 failed, 7 skipped by design (the repository-only emulator tests).
 
 Physical-device Firestore repository conformance:
 

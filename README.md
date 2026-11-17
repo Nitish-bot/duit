@@ -123,6 +123,8 @@ One-time, human-owned development setup:
    adb logcat -s DebugAppCheckProvider
    ```
 
+   The log line appears only once. If you missed it, read the stored token without logcat: `adb shell run-as com.gaylord.duit.dev cat shared_prefs/com.google.firebase.appcheck.debug.store.*.xml`. Treat the value as a secret and never commit it.
+
    In Firebase Console, open **Security → App Check → Apps**, find `com.gaylord.duit.dev`, choose **Manage debug tokens**, and register it ([Firebase's Android debug-provider instructions](https://firebase.google.com/docs/app-check/android/debug-provider)). Keep the token private, never commit it, and revoke it if it is exposed.
 5. Verify locally, then deploy by name. Never run `supabase functions deploy` without the name, because `pairing-local` must not be deployed:
 
@@ -131,6 +133,8 @@ One-time, human-owned development setup:
    npm --prefix functions test
    supabase functions deploy pairing
    ```
+
+   If Docker bundling fails with "Operation not permitted" (for example while colima mounts `$HOME` read-only), add `--use-api` to deploy without Docker.
 
 A paused free project returns errors until it is resumed in the Supabase dashboard; Android shows the connection-required state meanwhile. With no `duit.pairingBackendUrl`, the `dev` app reports Pairing as unavailable, and the `prod` flavor has no Pairing backend.
 
