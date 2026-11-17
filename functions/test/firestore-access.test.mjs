@@ -9,6 +9,7 @@ import {
 } from "@firebase/rules-unit-testing";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -145,6 +146,101 @@ describe("owner workspace isolation", () => {
     const database = memberDatabase("member-a");
 
     await assertFails(getDoc(doc(database, "users/member-a/workspace/main")));
+  });
+});
+
+describe("Shared View access", () => {
+  const view = (extra = {}) => ({
+    ownerUid: "member-a",
+    pairId: "pair-1",
+    partnerUid: "member-b",
+    shareGeneration: "gen-1",
+    title: "Water the plants",
+    ...extra,
+  });
+  const viewPath = "pairShares/pair-1/owners/member-a/tasks/task-1";
+  const completionPath = `${viewPath}/grants/gen-1/completions/2026-11-17`;
+
+  async function seedPair() {
+    await seedApproval("member-a");
+    await seedApproval("member-b");
+    await seedApproval("member-c");
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      const database = context.firestore();
+      await setDoc(doc(database, "pairMemberships/member-a"), {
+        pairId: "pair-1", partnerUid: "member-b", state: "ACTIVE",
+      });
+      await setDoc(doc(database, "pairMemberships/member-b"), {
+        pairId: "pair-1", partnerUid: "member-a", state: "ACTIVE",
+      });
+    });
+  }
+
+  test("the Owner publishes and the current Partner reads, read-only", async () => {
+    await seedPair();
+    await assertSucceeds(setDoc(doc(memberDatabase("member-a"), viewPath), view()));
+    await assertSucceeds(setDoc(doc(memberDatabase("member-a"), completionPath), {
+      partnerUid: "member-b", generation: "gen-1", date: "2026-11-17",
+    }));
+
+    const partner = memberDatabase("member-b");
+    assert.equal((await assertSucceeds(getDoc(doc(partner, viewPath)))).data()?.title, "Water the plants");
+    await assertSucceeds(getDoc(doc(partner, completionPath)));
+    await assertSucceeds(getDocs(collection(partner, "pairShares/pair-1/owners/member-a/tasks")));
+    await assertFails(setDoc(doc(partner, viewPath), view({ title: "Changed" })));
+    await assertFails(deleteDoc(doc(partner, viewPath)));
+  });
+
+  test("outsiders, other Pairs, and the signed-out cannot read or list", async () => {
+    await seedPair();
+    await assertSucceeds(setDoc(doc(memberDatabase("member-a"), viewPath), view()));
+
+    for (const database of [
+      memberDatabase("member-c"),
+      testEnvironment.unauthenticatedContext().firestore(),
+    ]) {
+      await assertFails(getDoc(doc(database, viewPath)));
+      await assertFails(getDocs(collection(database, "pairShares/pair-1/owners/member-a/tasks")));
+    }
+  });
+
+  test("the Owner cannot publish outside an active Pair or into someone else's path", async () => {
+    await seedPair();
+    await assertFails(setDoc(doc(memberDatabase("member-c"), viewPath), view({ ownerUid: "member-c" })));
+    await assertFails(setDoc(doc(memberDatabase("member-a"), viewPath), view({ partnerUid: "member-c" })));
+    await assertFails(setDoc(doc(memberDatabase("member-a"), viewPath), view({ pairId: "pair-2" })));
+  });
+
+  test("a former Partner loses access when the Pair ends", async () => {
+    await seedPair();
+    await assertSucceeds(setDoc(doc(memberDatabase("member-a"), viewPath), view()));
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await deleteDoc(doc(context.firestore(), "pairMemberships/member-b"));
+    });
+    await assertFails(getDoc(doc(memberDatabase("member-b"), viewPath)));
+  });
+
+  test("revoking removes access, and a re-share generation hides prior completions", async () => {
+    await seedPair();
+    const owner = memberDatabase("member-a");
+    await assertSucceeds(setDoc(doc(owner, viewPath), view()));
+    await assertSucceeds(setDoc(doc(owner, completionPath), { partnerUid: "member-b" }));
+    await assertSucceeds(deleteDoc(doc(owner, viewPath)));
+    const partner = memberDatabase("member-b");
+    assert.equal((await assertSucceeds(getDoc(doc(partner, viewPath)))).exists(), false);
+
+    // Even if an old completion document lingers, the new generation hides it.
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), completionPath), { partnerUid: "member-b" });
+    });
+    await assertSucceeds(setDoc(doc(owner, viewPath), view({ shareGeneration: "gen-2" })));
+    await assertFails(getDoc(doc(partner, completionPath)));
+  });
+
+  test("Partners cannot read canonical Owner data", async () => {
+    await seedPair();
+    await assertSucceeds(setDoc(doc(memberDatabase("member-a"), "users/member-a/tasks/t"), { visibility: "PRIVATE" }));
+    await assertFails(getDoc(doc(memberDatabase("member-b"), "users/member-a/tasks/t")));
   });
 });
 

@@ -22,6 +22,51 @@ service cloud.firestore {
       allow list, write: if false;
     }
 
+    function membershipPath(uid) {
+      return /databases/$(database)/documents/pairMemberships/$(uid);
+    }
+
+    function isActivePairMembership(uid, pairId, partnerUid) {
+      return exists(membershipPath(uid))
+        && get(membershipPath(uid)).data.state == 'ACTIVE'
+        && get(membershipPath(uid)).data.pairId == pairId
+        && get(membershipPath(uid)).data.partnerUid == partnerUid;
+    }
+
+    // Both sides must hold the same active, mutually confirmed Pair.
+    function currentPairBetween(pairId, ownerUid, partnerUid) {
+      return isActivePairMembership(ownerUid, pairId, partnerUid)
+        && isActivePairMembership(partnerUid, pairId, ownerUid);
+    }
+
+    function readsSharedView(pairId, ownerUid) {
+      return ownsApprovedWorkspace(ownerUid)
+        || (signedIn()
+          && hasActiveMemberApproval(request.auth.uid)
+          && currentPairBetween(pairId, ownerUid, request.auth.uid));
+    }
+
+    // Only the Owner publishes, and only into the Owner's current active Pair.
+    match /pairShares/{pairId}/owners/{ownerUid}/tasks/{taskId} {
+      allow read: if readsSharedView(pairId, ownerUid);
+      allow create, update: if ownsApprovedWorkspace(ownerUid)
+        && request.resource.data.ownerUid == ownerUid
+        && request.resource.data.pairId == pairId
+        && isActivePairMembership(ownerUid, pairId, request.resource.data.partnerUid);
+      allow delete: if ownsApprovedWorkspace(ownerUid);
+
+      // The generation lives in the path, so a stale or revoked grant is unreadable
+      // as soon as the Task document names a different generation.
+      match /grants/{generation}/completions/{completionId} {
+        allow read: if readsSharedView(pairId, ownerUid)
+          && exists(/databases/$(database)/documents/pairShares/$(pairId)/owners/$(ownerUid)/tasks/$(taskId))
+          && get(/databases/$(database)/documents/pairShares/$(pairId)/owners/$(ownerUid)/tasks/$(taskId)).data.shareGeneration == generation;
+        allow create, update: if ownsApprovedWorkspace(ownerUid)
+          && isActivePairMembership(ownerUid, pairId, request.resource.data.partnerUid);
+        allow delete: if ownsApprovedWorkspace(ownerUid);
+      }
+    }
+
     match /users/{ownerUid}/{document=**} {
       allow read, write: if ownsApprovedWorkspace(ownerUid);
     }
