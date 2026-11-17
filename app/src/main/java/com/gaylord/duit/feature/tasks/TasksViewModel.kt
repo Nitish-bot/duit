@@ -8,6 +8,8 @@ import com.gaylord.duit.domain.model.MemberActionMoment
 import com.gaylord.duit.domain.model.OccurrenceKey
 import com.gaylord.duit.domain.model.SubtaskIdentifier
 import com.gaylord.duit.domain.model.TaskIdentifier
+import com.gaylord.duit.domain.pairing.PairingStatus
+import com.gaylord.duit.workspace.CommandIdentifier
 import com.gaylord.duit.workspace.DuitWorkspace
 import com.gaylord.duit.workspace.MemberCommand
 import com.gaylord.duit.workspace.MemberCommandOutcome
@@ -15,6 +17,7 @@ import com.gaylord.duit.workspace.PersonalHistory
 import com.gaylord.duit.workspace.RecurringSeriesDetail
 import com.gaylord.duit.workspace.RecurringSeriesLibraryEntry
 import com.gaylord.duit.workspace.WorkspaceAccessState
+import java.util.UUID
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -36,6 +39,8 @@ data class TasksUiState(
     val isHistoryLoading: Boolean = false,
     val isCommandPending: Boolean = false,
     val correctionSuccessKey: Long = 0,
+    /** The current Partner's display name when a Pair is active and a Task may be shared. */
+    val partnerName: String? = null,
 )
 
 sealed interface TasksEvent {
@@ -61,6 +66,14 @@ sealed interface TasksEvent {
         val completionEpoch: CompletionEpoch,
         val checkedSubtaskIdentifiers: Set<SubtaskIdentifier>,
     ) : TasksEvent
+
+    data class ShareWithPartner(
+        val taskIdentifier: TaskIdentifier,
+    ) : TasksEvent
+
+    data class MakePrivate(
+        val taskIdentifier: TaskIdentifier,
+    ) : TasksEvent
 }
 
 typealias TasksEventHandler = (TasksEvent) -> Unit
@@ -69,6 +82,8 @@ sealed interface TasksEffect {
     data object WorkspaceActionFailed : TasksEffect
 
     data object CorrectionBecameStale : TasksEffect
+
+    data object SharingUnavailable : TasksEffect
 }
 
 class TasksViewModel internal constructor(
@@ -92,6 +107,11 @@ class TasksViewModel internal constructor(
 
     init {
         scope.launch {
+            workspace.pairingStatus.collect {
+                mutableState.update { it.copy(partnerName = currentPartnerName()) }
+            }
+        }
+        scope.launch {
             workspace.accessState.collect { accessState ->
                 val memberIdentifier =
                     (accessState as? WorkspaceAccessState.Ready)?.memberIdentifier
@@ -111,7 +131,41 @@ class TasksViewModel internal constructor(
             TasksEvent.BackToLibrary -> showLibrary()
             is TasksEvent.CorrectCompletion -> executeCorrection(event.toMemberCommand())
             is TasksEvent.CorrectToActionable -> executeCorrection(event.toMemberCommand())
+            is TasksEvent.ShareWithPartner ->
+                executeSharing(
+                    MemberCommand.ShareDailyTaskWithPartner(
+                        commandIdentifier = CommandIdentifier(UUID.randomUUID().toString()),
+                        taskIdentifier = event.taskIdentifier,
+                    ),
+                )
+            is TasksEvent.MakePrivate ->
+                executeSharing(MemberCommand.MakeTaskPrivate(event.taskIdentifier))
         }
+    }
+
+    private fun currentPartnerName(): String? {
+        val active = workspace.pairingStatus.value as? PairingStatus.Active
+        return active?.takeIf { it.partnerIdentifier != null }?.partnerIdentity?.displayName
+    }
+
+    private fun executeSharing(command: MemberCommand) {
+        if (!started || mutableState.value.isCommandPending) return
+        mutableState.update { it.copy(isCommandPending = true) }
+        commandJob =
+            scope.launch {
+                try {
+                    val outcome = workspace.executeWithOutcome(command)
+                    mutableState.update { it.copy(isCommandPending = false) }
+                    if (outcome is MemberCommandOutcome.SharingUnavailable) {
+                        effectChannel.send(TasksEffect.SharingUnavailable)
+                    }
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (_: Exception) {
+                    mutableState.update { it.copy(isCommandPending = false) }
+                    effectChannel.send(TasksEffect.WorkspaceActionFailed)
+                }
+            }
     }
 
     private fun start() {
@@ -145,6 +199,7 @@ class TasksViewModel internal constructor(
         mutableState.value =
             TasksUiState(
                 isLibraryLoading = started && hasReadyMember,
+                partnerName = currentPartnerName(),
             )
         if (started && hasReadyMember) startLibraryObservation()
     }

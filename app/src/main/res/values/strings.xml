@@ -112,6 +112,15 @@
     <string name="tasks_repeating_heading">Repeating Tasks</string>
     <string name="tasks_daily_from">Daily from %1$s</string>
     <string name="tasks_back_to_library">Back to Tasks</string>
+    <string name="tasks_visibility_private">Private. Only you can see this Task.</string>
+    <string name="tasks_visibility_shared">Shared with your Partner, read-only.</string>
+    <string name="tasks_library_shared">Shared with your Partner</string>
+    <string name="tasks_share_hint">Your Partner sees nothing until you choose to share. They would see its title, Subtask labels, schedule, and the days you complete it.</string>
+    <string name="tasks_share_with_partner">Share with %1$s</string>
+    <string name="tasks_share_no_pair">Sharing is available while you are paired.</string>
+    <string name="tasks_shared_scope">Reminders, Focus, checked Subtasks, corrections, and exact times stay with you. Your Partner cannot change this Task.</string>
+    <string name="tasks_make_private">Make Private</string>
+    <string name="tasks_make_private_offline_note">Making this Task Private takes effect for you immediately, even offline. Your Partner’s phone may keep showing what it already received until it next syncs.</string>
     <string name="tasks_completion_history_heading">Completion history</string>
     <string name="tasks_history_loading">Loading completion history</string>
     <string name="tasks_history_empty">No recorded completions yet.</string>
@@ -128,5 +137,6 @@
     <string name="tasks_mark_not_done">Mark not done</string>
     <string name="tasks_save_correction">Save changes</string>
     <string name="tasks_cancel_correction">Cancel</string>
+    <string name="sharing_unavailable">Sharing needs an active Pair. Check Together, then try again.</string>
     <string name="completion_correction_stale">This completion changed. Review the latest version before saving again.</string>
 </resources>

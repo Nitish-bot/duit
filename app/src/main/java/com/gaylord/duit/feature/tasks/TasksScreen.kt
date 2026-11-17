@@ -45,6 +45,8 @@ import com.gaylord.duit.R
 import com.gaylord.duit.domain.model.OccurrenceOutcome
 import com.gaylord.duit.domain.model.OccurrenceSubtaskState
 import com.gaylord.duit.domain.model.SubtaskIdentifier
+import com.gaylord.duit.domain.model.TaskVisibility
+import com.gaylord.duit.workspace.RecurringSeriesDetail
 import com.gaylord.duit.workspace.AgendaTask
 import com.gaylord.duit.workspace.RecurringSeriesLibraryEntry
 import com.gaylord.duit.feature.common.completionLocalTime
@@ -93,6 +95,7 @@ fun TasksScreen(
             use24HourTime = shouldUse24HourTime,
             modifier = modifier,
             onBack = { currentOnEvent(TasksEvent.BackToLibrary) },
+            onEvent = currentOnEvent,
             onCorrect = { task ->
                 correctionTaskIdentifier = task.identifier.value
                 correctionNominalDate = task.occurrence?.nominalDate?.toString()
@@ -210,6 +213,13 @@ private fun RecurringSeriesCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (item.detail.visibility is TaskVisibility.Shared) {
+                Text(
+                    text = stringResource(R.string.tasks_library_shared),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }
@@ -220,6 +230,7 @@ private fun RecurringTaskDetail(
     use24HourTime: Boolean,
     modifier: Modifier,
     onBack: () -> Unit,
+    onEvent: TasksEventHandler,
     onCorrect: (AgendaTask) -> Unit,
 ) {
     val selectedTask = requireNotNull(state.selectedTask)
@@ -250,6 +261,14 @@ private fun RecurringTaskDetail(
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
+        }
+        item {
+            SharingCard(
+                task = selectedTask,
+                partnerName = state.partnerName,
+                enabled = !state.isCommandPending,
+                onEvent = onEvent,
+            )
         }
         item {
             Text(
@@ -284,6 +303,67 @@ private fun RecurringTaskDetail(
                     use24HourTime = use24HourTime,
                     enabled = !state.isCommandPending,
                     onCorrect = { onCorrect(task) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharingCard(
+    task: RecurringSeriesDetail,
+    partnerName: String?,
+    enabled: Boolean,
+    onEvent: TasksEventHandler,
+) {
+    TasksCard {
+        if (task.visibility is TaskVisibility.Shared) {
+            Text(
+                text = stringResource(R.string.tasks_visibility_shared),
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.tasks_shared_scope),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(R.string.tasks_make_private_offline_note),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(
+                onClick = { onEvent(TasksEvent.MakePrivate(task.identifier)) },
+                enabled = enabled,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("tasks-make-private"),
+            ) {
+                Text(stringResource(R.string.tasks_make_private))
+            }
+        } else {
+            Text(
+                text = stringResource(R.string.tasks_visibility_private),
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (partnerName != null) {
+                Text(
+                    text = stringResource(R.string.tasks_share_hint),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TextButton(
+                    onClick = { onEvent(TasksEvent.ShareWithPartner(task.identifier)) },
+                    enabled = enabled,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("tasks-share-with-partner"),
+                ) {
+                    Text(stringResource(R.string.tasks_share_with_partner, partnerName))
+                }
+            } else {
+                Text(
+                    text = stringResource(R.string.tasks_share_no_pair),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
                 )
             }
         }

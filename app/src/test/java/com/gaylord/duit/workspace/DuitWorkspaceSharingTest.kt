@@ -344,7 +344,7 @@ class DuitWorkspaceSharingTest {
     }
 }
 
-private class StaticStatusPairingGateway(
+internal class StaticStatusPairingGateway(
     private val status: PairingStatus,
 ) : PairingGateway {
     override suspend fun getPairingStatus(): PairingCallResult<PairingStatus> =

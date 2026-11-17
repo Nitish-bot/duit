@@ -24,6 +24,12 @@ import com.gaylord.duit.workspace.InitialTaskIdentifiers
 import com.gaylord.duit.workspace.MemberApproval
 import com.gaylord.duit.workspace.MemberApprovalGateway
 import com.gaylord.duit.workspace.MemberCommand
+import com.gaylord.duit.workspace.PairCommand
+import com.gaylord.duit.workspace.StaticStatusPairingGateway
+import com.gaylord.duit.sharing.InMemorySharedViewGateway
+import com.gaylord.duit.domain.pairing.PairIdentifier
+import com.gaylord.duit.domain.pairing.PairingStatus
+import com.gaylord.duit.domain.pairing.PartnerIdentity
 import com.gaylord.duit.workspace.OwnerWorkspaceHydration
 import com.gaylord.duit.workspace.OwnerWorkspaceHydrationGateway
 import com.gaylord.duit.workspace.PersistedWorkspaceSessionGateway
@@ -241,7 +247,85 @@ class TasksViewModelTest {
             assertEquals(TasksEffect.CorrectionBecameStale, effect.await())
             assertEquals(1, viewModel.state.value.history.completions.size)
         }
+
+    @Test
+    fun `a paired Owner can share a Daily Task with the Partner and make it Private again`() =
+        runTest {
+            val workspace = createPairedTasksWorkspace(PairedStatus)
+            workspace.execute(PairCommand.RefreshStatus)
+            workspace.addDailyTask()
+            val viewModel = TasksViewModel(workspace, backgroundScope)
+            viewModel.onEvent(TasksEvent.Started)
+            runCurrent()
+            viewModel.onEvent(TasksEvent.SelectTask(DailyTaskIdentifier))
+            runCurrent()
+
+            assertEquals("Sam", viewModel.state.value.partnerName)
+            assertEquals(TaskVisibility.Private, viewModel.state.value.selectedTask?.visibility)
+
+            viewModel.onEvent(TasksEvent.ShareWithPartner(DailyTaskIdentifier))
+            runCurrent()
+
+            assertEquals(
+                true,
+                viewModel.state.value.selectedTask?.visibility is TaskVisibility.Shared,
+            )
+
+            viewModel.onEvent(TasksEvent.MakePrivate(DailyTaskIdentifier))
+            runCurrent()
+
+            assertEquals(TaskVisibility.Private, viewModel.state.value.selectedTask?.visibility)
+        }
+
+    @Test
+    fun `an unpaired Owner is told sharing is unavailable and the Task stays Private`() =
+        runTest {
+            val workspace = createPairedTasksWorkspace(PairingStatus.Unpaired)
+            workspace.execute(PairCommand.RefreshStatus)
+            workspace.addDailyTask()
+            val viewModel = TasksViewModel(workspace, backgroundScope)
+            viewModel.onEvent(TasksEvent.Started)
+            runCurrent()
+            viewModel.onEvent(TasksEvent.SelectTask(DailyTaskIdentifier))
+            runCurrent()
+            val effect = async { viewModel.effects.first() }
+
+            viewModel.onEvent(TasksEvent.ShareWithPartner(DailyTaskIdentifier))
+            runCurrent()
+
+            assertEquals(null, viewModel.state.value.partnerName)
+            assertEquals(TasksEffect.SharingUnavailable, effect.await())
+            assertEquals(TaskVisibility.Private, viewModel.state.value.selectedTask?.visibility)
+        }
 }
+
+private val PairedStatus =
+    PairingStatus.Active(
+        pairIdentifier = PairIdentifier("pair-1"),
+        partnerIdentity = PartnerIdentity("Sam", null),
+        partnerIdentifier = MemberIdentifier("member-sam"),
+    )
+
+private fun createPairedTasksWorkspace(status: PairingStatus): DuitWorkspace =
+    DuitWorkspace(
+        memberIdentifier = MemberIdentifier("member-1"),
+        clock = Clock.fixed(Instant.parse("2026-08-12T07:15:00Z"), ZoneId.of("UTC")),
+        zoneProvider = { ZoneId.of("UTC") },
+        taskIdentities =
+            TaskIdentityGenerator { commandIdentifier ->
+                InitialTaskIdentifiers(
+                    taskIdentifier = TaskIdentifier("task-${commandIdentifier.value}"),
+                    revisionIdentifier =
+                        TaskRevisionIdentifier("revision-${commandIdentifier.value}"),
+                    seriesRevisionIdentifier =
+                        SeriesRevisionIdentifier("series-revision-${commandIdentifier.value}"),
+                )
+            },
+        persistence = TrackingTasksRepository(),
+        reminders = TasksTestReminderGateway,
+        pairing = StaticStatusPairingGateway(status),
+        sharedViews = InMemorySharedViewGateway(),
+    )
 
 private val DailyDate = LocalDate.of(2026, 8, 12)
 private val DailyTaskIdentifier = TaskIdentifier("task-water-herbs")

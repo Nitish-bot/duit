@@ -94,6 +94,12 @@ class MainActivity : ComponentActivity() {
                     when (effect) {
                         TasksEffect.WorkspaceActionFailed -> showWorkspaceActionFailure()
                         TasksEffect.CorrectionBecameStale -> showStaleCorrection()
+                        TasksEffect.SharingUnavailable ->
+                            Toast.makeText(
+                                this@MainActivity,
+                                R.string.sharing_unavailable,
+                                Toast.LENGTH_LONG,
+                            ).show()
                     }
                 }
             }
