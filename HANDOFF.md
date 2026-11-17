@@ -46,7 +46,7 @@ Tracker state:
 
 - Closed: #2, #3, #4, #5.
 - #6 is closed. Device evidence: `connectedDevDebugAndroidTest` 39 tests, 0 failed; the Firestore repository harness passed 7/7 twice.
-- #7 stays open and blocked. On 2026-11-15 the user decided not to enable Blaze on the development project, so the `development-only` Functions codebase cannot be deployed and real two-account acceptance cannot run. #8 (blocked by #7) and #10 (Cheer delivery via Functions/FCM) are blocked with it until that changes or ADR-0005 is revisited.
+- #7 stays open but is no longer blocked on Blaze. On 2026-11-17 Pairing moved from Cloud Functions to a Supabase Edge Function on the free plan (ADR-0007; Firestore, Auth, Rules and App Check are unchanged). The code and local tests are done; #7 now waits on the human-owned Supabase and service-account setup (README "Pairing backend (Supabase Edge Function) and App Check"), then the two-phone drill. #8 (blocked by #7) and #10 (Cheer delivery; no Firestore triggers off Cloud Functions, so it becomes a client-invoked edge call, design in #10) follow #7.
 - The dev build was installed on the test phone on 2026-11-15 and launches without a crash; Together was not exercised (no sign-in).
 - Dependency-unblocked next: #9.
 - #1 remains the open umbrella.
@@ -134,16 +134,16 @@ Android and development deployment pieces:
 
 - Android gateway and `PairCommand` handling in `DuitWorkspace`, kept orthogonal to workspace access.
 - `TogetherViewModel` and `TogetherScreen` cover the full Together state set with lifecycle-bound polling.
-- Dev-only Functions client and App Check debug provider (dev flavor only).
-- `functions/development` and `firebase.development.json` deploy Functions only; Firestore Rules for every environment remain the approval-gated `firestore.rules`.
+- Dev-only Pairing client (Firebase callable protocol by URL, `getHttpsCallableFromUrl`) and App Check debug provider (dev flavor only). The URL comes from `duit.pairingBackendUrl` in the ignored `local.properties` or `-Pduit.pairingBackendUrl`; empty means an unavailable backend, and CI needs the property if it should exercise Pairing.
+- The server handler is `supabase/functions/_shared`, deployed as the `pairing` Edge Function (always `supabase functions deploy pairing` by name). Firestore Rules for every environment remain the approval-gated `firestore.rules`; `firebase.json` ships no Functions.
 - Partner identity is taken from the Google provider record, not editable profile claims.
 
-`functions/emulator/src/index.ts` exports the callables with App Check disabled because Firebase has no App Check emulator. `functions/src/index.ts` is intentionally empty, and the production-boundary tests require it to stay that way until a deliberate deploy boundary exists.
+`functions/emulator/src/server.ts` is a Node host for the same handler with App Check disabled, because Firebase has no App Check emulator; the deployed `pairing` entry always enforces it. `supabase/functions/pairing-local` serves the App Check-free handler on the Deno runtime for local runs and must never be deployed.
 
 ## Immediate next work
 
 1. Start #9 (the only dependency-unblocked issue).
-2. #7 is blocked: it needs Blaze on the development project (declined 2026-11-15) or a revisit of ADR-0005. If that changes, deploy with the README's "Development Functions and App Check" command, register the App Check debug token, then run the two-account drill (create, enter, mutual identity review, both confirmations, active Together on both phones, rejection paths). Until then #8 and #10 stay blocked.
+2. #7 waits on the human-owned setup in the README's "Pairing backend (Supabase Edge Function) and App Check": Supabase account and project, `supabase link`, the dedicated service account and `supabase secrets set FIREBASE_SERVICE_ACCOUNT`, `duit.pairingBackendUrl`, and the App Check debug token. Then `supabase functions deploy pairing` and run the two-account drill (create, enter, mutual identity review, both confirmations, active Together on both phones, rejection paths). Until then #8 and #10 stay blocked.
 
 Decision note: development self-admission was drafted and deliberately dropped on 2026-11-14. Member Approval stays administrator-created in every environment (ADR-0006). If `firestore.development.rules` was ever deployed to the development project, redeploy `firestore.rules` with `firebase.json`.
 
@@ -178,7 +178,7 @@ Development Firebase:
 - `app/src/dev/google-services.json` exists and is intentionally ignored.
 - Google sign-in, Firestore, debug SHA-1/SHA-256 certificates, and Firestore Rules are configured in dev.
 - Two Google identities are approved Members in dev; a third authenticated identity is intentionally unapproved for rejection tests. Do not record their emails or UIDs in commits/issues.
-- Functions and App Check are not deployed/configured for Android acceptance yet.
+- The Pairing Edge Function and App Check are not deployed/configured for Android acceptance yet.
 - Production remains untouched.
 
 Local tools:
@@ -221,7 +221,7 @@ Broad Android gate used after #5:
   :app:compileProdDebugAndroidTestKotlin
 ```
 
-Last result (2026-11-14): `BUILD SUCCESSFUL`, 182 tasks, 87 devDebug unit tests, 0 failures.
+Last result (2026-11-17, after the Supabase move): `BUILD SUCCESSFUL`, 90 devDebug and 79 prodDebug unit tests, 0 failures.
 
 Connected UI:
 
@@ -246,9 +246,9 @@ npm --prefix functions run typecheck
 npm --prefix functions test
 ```
 
-Last result (2026-11-14): typecheck passed, boundary tests 9/9, Auth + Functions + Firestore emulator suite 28/28. Connected and physical-device suites were NOT run on 2026-11-14.
+Last result (2026-11-17): typecheck passed, boundary tests 12/12, Auth + Firestore emulator suite with the Node Pairing host 28/28 (19 Pairing cases); the same 19 Pairing cases also passed 19/19 against `supabase functions serve` (Deno Edge runtime) via `pairing-local`. Android `./gradlew test :app:lintDevDebug :app:lintProdDebug :app:assembleDevDebug :app:assembleProdDebug` passed (90 devDebug and 79 prodDebug unit tests). Connected and physical-device suites were NOT run on 2026-11-17 (no device attached).
 
-The Functions emulator suite uses ports 5001/8080/9099 plus hub/logging/websocket ports 4400/4500/9150. Do not run it concurrently with another Firebase emulator harness.
+The emulator suite uses ports 8080/9099 and 5002 for the Pairing host, plus hub/logging/websocket ports 4400/4500/9150. Do not run it concurrently with another Firebase emulator harness.
 
 ## Known non-blocking design debt
 

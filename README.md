@@ -108,36 +108,33 @@ Production Firebase is deliberately not required during development. Use a separ
 
 Repeat steps 6–9 for any additional development Member. Approving another UID requires no app, Rules, or Functions redeployment. Pairing remains optional; each approved Member owns a private workspace whether paired or not.
 
-## Development Functions and App Check
+## Pairing backend (Supabase Edge Function) and App Check
 
-The Pairing callables have a separate development-only deployment boundary. `firebase.development.json` packages the `development-only` codebase from `functions/development`; the default production Functions entry stays empty, and the local emulator keeps App Check disabled. Never substitute `firebase.json` in the command below or target a production project.
+Pairing's server-authoritative logic runs as a Supabase Edge Function (see [ADR-0007](docs/adr/0007-host-pairing-on-supabase-edge-functions.md)). It keeps the Firebase callable protocol, verifies the Firebase ID token and App Check token, and runs the Firestore transactions with the Admin SDK. Firebase hosting, Authentication, Rules and the free plan are unchanged; there is no Supabase database. The deployed function is `supabase/functions/pairing`; only that function disables Supabase JWT verification. Never target a production project from these steps.
 
-Cloud Functions deployment requires the development Firebase project to use the Blaze plan. Before deploying, configure the App Check debug provider only in the `dev` flavor and register the specific development installation:
+One-time, human-owned development setup:
 
-1. Build and run `devDebug`, then open Together so the app requests an App Check token. Find the token in the device logs:
+1. Create a Supabase account and one free project, then run `supabase login` and `supabase link` from the repository root. The project reference lands in the ignored `supabase/.temp`.
+2. In the development Google Cloud project, create a dedicated service account with only Cloud Datastore User, Firebase Authentication Viewer and Firebase App Check Token Verifier. Download its key, store it as a secret with `supabase secrets set FIREBASE_SERVICE_ACCOUNT="$(cat <key.json>)"`, and delete the local copy. Never commit it; rotate it if it is ever exposed.
+3. Put the function URL in the ignored `local.properties` as `duit.pairingBackendUrl=https://<project-ref>.supabase.co/functions/v1/pairing`. CI and one-off builds can pass `-Pduit.pairingBackendUrl=...` instead. The build rejects any other shape.
+4. Register the App Check debug token. Build and run `devDebug`, open Together, and read the token from the device logs:
 
    ```sh
    adb logcat -s DebugAppCheckProvider
    ```
 
-2. In Firebase Console, open **Security → App Check → Apps**, find `com.gaylord.duit.dev`, choose **Manage debug tokens**, and register the logged token. Follow [Firebase's Android debug-provider instructions](https://firebase.google.com/docs/app-check/android/debug-provider). Keep the token and debug build private, never commit the token, and revoke it immediately if it is exposed.
-3. Verify the isolated deployment package locally:
+   In Firebase Console, open **Security → App Check → Apps**, find `com.gaylord.duit.dev`, choose **Manage debug tokens**, and register it ([Firebase's Android debug-provider instructions](https://firebase.google.com/docs/app-check/android/debug-provider)). Keep the token private, never commit it, and revoke it if it is exposed.
+5. Verify locally, then deploy by name. Never run `supabase functions deploy` without the name, because `pairing-local` must not be deployed:
 
    ```sh
    npm --prefix functions run typecheck
-   npm --prefix functions run test:boundaries
+   npm --prefix functions test
+   supabase functions deploy pairing
    ```
 
-4. While signed in to the Firebase CLI with an account that owns only the development project, deploy only the development codebase. Replace the placeholder with the project ID from the development `google-services.json` or Firebase Console:
+A paused free project returns errors until it is resumed in the Supabase dashboard; Android shows the connection-required state meanwhile. With no `duit.pairingBackendUrl`, the `dev` app reports Pairing as unavailable, and the `prod` flavor has no Pairing backend.
 
-   ```sh
-   ./functions/node_modules/.bin/firebase deploy \
-     --config firebase.development.json \
-     --only functions:development-only \
-     --project <development-project-id>
-   ```
-
-The four deployed Pairing callables reject missing or invalid App Check tokens. Firebase's callable client attaches a registered debug token automatically; see [callable Functions enforcement](https://firebase.google.com/docs/app-check/cloud-functions). A new development installation may produce a different token that must be registered before Pairing acceptance tests. This workflow does not deploy production Functions or change the production entry point.
+Running the function locally on a phone: Android blocks cleartext HTTP by default and the app has no network security configuration, so a plain `http://` address to a local serve will not work from a device without adding a dev-only network security config (not part of this repository; `adb reverse` does not change that). Prefer testing against the deployed development function from a phone, and use the emulator suite for local runs.
 
 ## Functions and Firebase Emulator Suite
 
@@ -147,7 +144,7 @@ Type-check the Functions package:
 npm --prefix functions run typecheck
 ```
 
-Run its automated test. This builds the Functions package, starts the Auth, Functions, and Firestore Emulators for the local-only `demo-duit` project, checks the emulator-only Functions plus Member Approval/owner-isolation Rules, and shuts the emulators down:
+Run its automated test. This builds the Pairing host, starts the Auth and Firestore Emulators for the local-only `demo-duit` project plus a Node host serving the same Pairing handler (App Check off, because the Emulator Suite has no App Check emulator), runs the Pairing cases and the Member Approval/owner-isolation Rules checks, and shuts everything down:
 
 ```sh
 npm --prefix functions test
@@ -177,6 +174,12 @@ npm --prefix functions run test:smoke
 
 The Emulator UI is available at `http://127.0.0.1:4000`. Stop the session with Ctrl-C.
 
-Running Pairing on the Supabase Edge runtime locally (optional; the suite above uses a Node host for the same handler). Install `supabase`, `deno`, `colima` and `docker` with Homebrew and run `colima start --memory 4`; a project outside `$HOME` needs `--mount <dir>:w`. Start only the needed containers with `supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,postgrest,postgres-meta,studio,logflare,vector,supavisor` (the first pull is about 3 GB). Start the emulators bound to `0.0.0.0` (a temporary config copy), then `npm --prefix functions run deno:metadata-stub`, which fakes the GCE metadata server because the Firestore REST transport insists on a token even against the emulator. Write an untracked env file with `FIRESTORE_EMULATOR_HOST=host.docker.internal:8080`, `FIREBASE_AUTH_EMULATOR_HOST=host.docker.internal:9099`, `GCLOUD_PROJECT=demo-duit` and `GCE_METADATA_HOST=host.docker.internal:8099`, run `supabase functions serve --no-verify-jwt --env-file <file>`, and point the suite at the App Check-free `pairing-local` function with `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GCLOUD_PROJECT=demo-duit PAIRING_BASE_URL=http://127.0.0.1:54321/functions/v1/pairing-local node --test functions/test/pairing-functions.test.mjs`. Never deploy `pairing-local`; deploy by name with `supabase functions deploy pairing`.
+To exercise the Deno Edge runtime itself against the emulators (optional): install `supabase`, `deno`, `colima` and `docker` with Homebrew and run `colima start --memory 4` (a project outside `$HOME` also needs `--mount <dir>:w`). Start only the needed containers with `supabase start -x gotrue,realtime,storage-api,imgproxy,mailpit,postgrest,postgres-meta,studio,logflare,vector,supavisor` (the first pull is about 3 GB). Start the emulators bound to `0.0.0.0` using a temporary copy of `firebase.emulator.json`. Run `npm --prefix functions run deno:metadata-stub`, a fake GCE metadata server, because the Firestore REST transport asks for a token even against the emulator. Write an untracked env file containing `FIRESTORE_EMULATOR_HOST=host.docker.internal:8080`, `FIREBASE_AUTH_EMULATOR_HOST=host.docker.internal:9099`, `GCLOUD_PROJECT=demo-duit` and `GCE_METADATA_HOST=host.docker.internal:8099`, then run `supabase functions serve --no-verify-jwt --env-file <file>`. Point the suite at the App Check-free `pairing-local` function:
+
+```sh
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GCLOUD_PROJECT=demo-duit \
+  PAIRING_BASE_URL=http://127.0.0.1:54321/functions/v1/pairing-local \
+  node --test functions/test/pairing-functions.test.mjs
+```
 
 The bootstrap workflow uses Firebase's `demo-duit` project ID and requires no production Firebase credentials. Do not add production credentials to run these commands.
