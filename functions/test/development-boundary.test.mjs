@@ -1,233 +1,118 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const repositoryRoot = new URL("../../", import.meta.url);
 const requireFromFunctions = createRequire(new URL("../package.json", import.meta.url));
-const pairingCallableNames = [
-  "acceptPairInvite",
-  "confirmPair",
-  "createPairInvite",
-  "getPairingStatus",
-];
+const { createPairingRequestHandler } = requireFromFunctions(
+  "./emulator/lib/supabase/functions/_shared/callable-protocol.js",
+);
 
-test("development deployment uses a distinct Functions source", async () => {
-  const [developmentConfig, productionConfig] = await Promise.all([
-    readConfig("firebase.development.json"),
-    readConfig("firebase.json"),
-  ]);
+const baseUrl = "https://example.test/functions/v1/pairing";
 
-  const developmentFunctions = functionsDefinition(developmentConfig);
-  const productionFunctions = functionsDefinition(productionConfig);
+function handlerWith(policy, verifiers = {}) {
+  return createPairingRequestHandler(policy, {
+    verifyAppCheck: async () => ({}),
+    verifyIdToken: async () => {
+      throw new Error("no ID token expected");
+    },
+    ...verifiers,
+  });
+}
 
-  assert.equal(developmentFunctions?.source, "functions/development");
-  assert.equal(developmentFunctions?.codebase, "development-only");
-  assert.notEqual(developmentFunctions?.source, productionFunctions?.source);
+function post(operation, { body = { data: {} }, headers = {}, method = "POST" } = {}) {
+  return new Request(`${baseUrl}/${operation}`, {
+    body: method === "POST" ? JSON.stringify(body) : undefined,
+    headers: { "Content-Type": "application/json", ...headers },
+    method,
+  });
+}
+
+async function outcome(response) {
+  return { body: await response.json(), status: response.status };
+}
+
+test("enforced App Check rejects a missing token before anything else runs", async () => {
+  const handler = handlerWith({ enforceAppCheck: true });
+
+  const { body, status } = await outcome(await handler(post("createPairInvite")));
+
+  assert.equal(status, 401);
+  assert.equal(body.error.status, "UNAUTHENTICATED");
 });
 
-test("development deployment carries no Firestore Rules of its own", async () => {
-  const [developmentConfig, productionConfig] = await Promise.all([
-    readConfig("firebase.development.json"),
-    readConfig("firebase.json"),
-  ]);
-
-  // Member Approval stays administrator-controlled in every environment:
-  // the development project uses the same approval-gated Rules as production.
-  assert.equal(developmentConfig.firestore, undefined);
-  assert.equal(productionConfig.firestore?.rules, "firestore.rules");
-});
-
-test("the development Functions package is self-contained after its build", async () => {
-  const developmentConfig = await readConfig("firebase.development.json");
-  const developmentFunctions = functionsDefinition(developmentConfig);
-  assert.equal(
-    developmentFunctions?.predeploy?.[0],
-    'npm --prefix "$RESOURCE_DIR" run build',
-  );
-  for (const ignoredPath of [
-    ".git",
-    ".runtimeconfig.json",
-    "firebase-debug.log",
-    "firebase-debug.*.log",
-    "node_modules",
-  ]) {
-    assert.ok(developmentFunctions?.ignore?.includes(ignoredPath), ignoredPath);
-  }
-
-  const sourceUrl = new URL(`${developmentFunctions.source}/`, repositoryRoot);
-  const sourcePath = fileURLToPath(sourceUrl);
-  const packageJson = JSON.parse(
-    await readFile(new URL("package.json", sourceUrl), "utf8"),
-  );
-  const entryPath = fileURLToPath(new URL(packageJson.main, sourceUrl));
-  const runtimeImports = await collectRuntimeImports(entryPath, sourcePath);
-
-  assert.equal(isInside(sourcePath, entryPath), true, entryPath);
-  assert.ok(runtimeImports.relative.length > 0);
-  for (const importedPath of runtimeImports.relative) {
-    assert.equal(isInside(sourcePath, importedPath), true, importedPath);
-  }
-  for (const packageName of runtimeImports.packages) {
-    assert.ok(packageJson.dependencies?.[packageName], packageName);
+test("enforced App Check treats every verification failure as unauthenticated", async () => {
+  for (const message of ["Decoding App Check token failed", "InvalidCharacterError", "anything"]) {
+    const handler = handlerWith(
+      { enforceAppCheck: true },
+      { verifyAppCheck: async () => { throw new Error(message); } },
+    );
+    const { body, status } = await outcome(
+      await handler(post("createPairInvite", { headers: { "X-Firebase-AppCheck": "bogus" } })),
+    );
+    assert.equal(status, 401, message);
+    assert.equal(body.error.status, "UNAUTHENTICATED", message);
+    assert.doesNotMatch(JSON.stringify(body), new RegExp(message), message);
   }
 });
 
-test("development exports only App Check-enforced Pairing callables", async () => {
-  const developmentConfig = await readConfig("firebase.development.json");
-  const developmentFunctions = functionsDefinition(developmentConfig);
-  const sourceUrl = new URL(`${developmentFunctions.source}/`, repositoryRoot);
-  const sourcePath = fileURLToPath(sourceUrl);
-  const packageJson = JSON.parse(
-    await readFile(new URL("package.json", sourceUrl), "utf8"),
-  );
-  const entryPath = fileURLToPath(new URL(packageJson.main, sourceUrl));
-  const pairingPath = resolve(sourcePath, "lib/src/pairing.js");
-  const httpsModule = requireFromFunctions("firebase-functions/v2/https");
-  const originalOnCall = httpsModule.onCall;
-  const observedOptions = [];
+test("a verified App Check token reaches the handler, which still needs a signed-in Member", async () => {
+  const handler = handlerWith({ enforceAppCheck: true });
 
-  httpsModule.onCall = (options) => {
-    observedOptions.push(options);
-    return () => undefined;
+  const { body, status } = await outcome(
+    await handler(post("createPairInvite", { headers: { "X-Firebase-AppCheck": "ok" } })),
+  );
+
+  assert.equal(status, 401);
+  assert.equal(body.error.message, "Sign in to use Pairing.");
+});
+
+test("an invalid ID token is unauthenticated and a malformed header never reaches the handler", async () => {
+  const handler = handlerWith({ enforceAppCheck: false });
+
+  for (const authorization of ["Bearer bad", "Basic abc"]) {
+    const { body, status } = await outcome(
+      await handler(post("getPairingStatus", { headers: { Authorization: authorization } })),
+    );
+    assert.equal(status, 401, authorization);
+    assert.equal(body.error.status, "UNAUTHENTICATED", authorization);
+  }
+});
+
+test("protocol errors use the callable protocol statuses", async () => {
+  const handler = handlerWith({ enforceAppCheck: false });
+
+  const get = await outcome(await handler(post("createPairInvite", { method: "GET" })));
+  assert.equal(get.status, 405);
+  const unknown = await outcome(await handler(post("deleteEverything")));
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.body.error.status, "NOT_FOUND");
+  const invalid = await outcome(await handler(post("createPairInvite", { body: { data: { extra: 1 } } })));
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.status, "INVALID_ARGUMENT");
+  const notJson = await handler(
+    new Request(`${baseUrl}/createPairInvite`, { body: "x", headers: { "Content-Type": "text/plain" }, method: "POST" }),
+  );
+  assert.equal(notJson.status, 400);
+});
+
+test("an unexpected failure returns INTERNAL with no detail and does not escape", async () => {
+  const handler = handlerWith({ enforceAppCheck: false });
+  const brokenRequest = {
+    headers: {
+      get() {
+        throw new Error("secret internal detail");
+      },
+    },
+    method: "POST",
+    url: `${baseUrl}/getPairingStatus`,
   };
-  delete requireFromFunctions.cache[entryPath];
-  delete requireFromFunctions.cache[pairingPath];
-
+  const originalError = console.error;
+  console.error = () => undefined;
   try {
-    const developmentExports = requireFromFunctions(entryPath);
-
-    assert.deepEqual(Object.keys(developmentExports).sort(), pairingCallableNames);
-    assert.equal(observedOptions.length, pairingCallableNames.length);
-    for (const options of observedOptions) {
-      assert.equal(options.enforceAppCheck, true);
-      assert.equal(options.region, "us-central1");
-    }
+    const { body, status } = await outcome(await handler(brokenRequest));
+    assert.equal(status, 500);
+    assert.deepEqual(body, { error: { message: "INTERNAL", status: "INTERNAL" } });
   } finally {
-    httpsModule.onCall = originalOnCall;
-    delete requireFromFunctions.cache[entryPath];
-    delete requireFromFunctions.cache[pairingPath];
+    console.error = originalError;
   }
 });
-
-test("the local emulator keeps App Check enforcement disabled", () => {
-  const entryPath = fileURLToPath(
-    new URL("../emulator/lib/index.js", import.meta.url),
-  );
-  const pairingPath = fileURLToPath(
-    new URL("../lib/pairing.js", import.meta.url),
-  );
-  const httpsModule = requireFromFunctions("firebase-functions/v2/https");
-  const originalOnCall = httpsModule.onCall;
-  const observedOptions = [];
-
-  httpsModule.onCall = (options) => {
-    observedOptions.push(options);
-    return () => undefined;
-  };
-  delete requireFromFunctions.cache[entryPath];
-  delete requireFromFunctions.cache[pairingPath];
-
-  try {
-    const emulatorExports = requireFromFunctions(entryPath);
-
-    for (const callableName of pairingCallableNames) {
-      assert.equal(typeof emulatorExports[callableName], "function");
-    }
-    assert.equal(observedOptions.length, pairingCallableNames.length);
-    for (const options of observedOptions) {
-      assert.equal(options.enforceAppCheck, false);
-    }
-  } finally {
-    httpsModule.onCall = originalOnCall;
-    delete requireFromFunctions.cache[entryPath];
-    delete requireFromFunctions.cache[pairingPath];
-  }
-});
-
-test("the Functions package gates the development deployment boundary", async () => {
-  const packageJson = JSON.parse(
-    await readFile(new URL("../package.json", import.meta.url), "utf8"),
-  );
-
-  assert.equal(
-    packageJson.scripts["build:development"],
-    "tsc --project development/tsconfig.json",
-  );
-  assert.match(packageJson.scripts.build, /build:development/);
-  assert.match(packageJson.scripts.typecheck, /development\/tsconfig\.json/);
-  assert.match(
-    packageJson.scripts["test:boundaries"],
-    /development-boundary\.test\.mjs/,
-  );
-});
-
-test("the documented deploy command targets only the development codebase", async () => {
-  const readme = await readFile(new URL("README.md", repositoryRoot), "utf8");
-  const instructions = readme
-    .split("## Development Functions and App Check\n")[1]
-    ?.split("\n## ")[0];
-
-  assert.ok(instructions);
-  assert.match(instructions, /Manage debug tokens/);
-  assert.match(instructions, /--config firebase\.development\.json/);
-  assert.match(instructions, /--only functions:development-only/);
-  assert.match(instructions, /--project <development-project-id>/);
-  assert.doesNotMatch(instructions, /--config firebase\.json/);
-});
-
-async function readConfig(fileName) {
-  const contents = await readFile(new URL(fileName, repositoryRoot), "utf8");
-  return JSON.parse(contents);
-}
-
-function functionsDefinition(config) {
-  return Array.isArray(config.functions)
-    ? config.functions[0]
-    : config.functions;
-}
-
-async function collectRuntimeImports(entryPath, sourcePath) {
-  const pending = [entryPath];
-  const visited = new Set();
-  const relativeImports = [];
-  const packageImports = new Set();
-
-  while (pending.length > 0) {
-    const filePath = pending.pop();
-    if (visited.has(filePath)) continue;
-    visited.add(filePath);
-
-    const contents = await readFile(filePath, "utf8");
-    for (const match of contents.matchAll(/\brequire\(["']([^"']+)["']\)/g)) {
-      const specifier = match[1];
-      if (specifier.startsWith(".")) {
-        const importedPath = resolve(dirname(filePath), specifier);
-        relativeImports.push(importedPath);
-        assert.equal(isInside(sourcePath, importedPath), true, importedPath);
-        pending.push(importedPath);
-      } else if (!specifier.startsWith("node:")) {
-        packageImports.add(packageName(specifier));
-      }
-    }
-  }
-
-  return {
-    packages: packageImports,
-    relative: relativeImports,
-  };
-}
-
-function isInside(parentPath, candidatePath) {
-  const relativePath = relative(parentPath, candidatePath);
-  return relativePath !== ".." && !relativePath.startsWith(`..${sep}`);
-}
-
-function packageName(specifier) {
-  const segments = specifier.split("/");
-  return specifier.startsWith("@")
-    ? `${segments[0]}/${segments[1]}`
-    : segments[0];
-}

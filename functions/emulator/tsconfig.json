@@ -2,7 +2,13 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "outDir": "lib",
-    "rootDir": "src"
+    "rootDir": "../..",
+    "paths": {
+      "firebase-admin/app": ["../node_modules/firebase-admin/lib/app/index.d.ts"],
+      "firebase-admin/app-check": ["../node_modules/firebase-admin/lib/app-check/index.d.ts"],
+      "firebase-admin/auth": ["../node_modules/firebase-admin/lib/auth/index.d.ts"],
+      "firebase-admin/firestore": ["../node_modules/firebase-admin/lib/firestore/index.d.ts"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../../supabase/functions/_shared"]
 }

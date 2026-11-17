@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "firebase-admin/app": "npm:firebase-admin@14.2.0/app",
+    "firebase-admin/app-check": "npm:firebase-admin@14.2.0/app-check",
+    "firebase-admin/auth": "npm:firebase-admin@14.2.0/auth",
+    "firebase-admin/firestore": "npm:firebase-admin@14.2.0/firestore"
+  }
+}

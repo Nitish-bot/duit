@@ -1,6 +1,5 @@
 import { createHash, randomInt } from "node:crypto";
 
-import { getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import {
   type DocumentData,
@@ -9,12 +8,8 @@ import {
   Timestamp,
   type Transaction,
 } from "firebase-admin/firestore";
-import {
-  type CallableRequest,
-  type FunctionsErrorCode,
-  HttpsError,
-  onCall,
-} from "firebase-functions/v2/https";
+
+import { adminApp } from "./admin-app.ts";
 
 const INVITE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const INVITE_LENGTH = 8;
@@ -25,8 +20,45 @@ const ACCEPT_RATE_WINDOW_MILLIS = 5 * 60_000;
 const ACCEPT_COOLDOWN_MILLIS = 5 * 60_000;
 const MAX_FAILED_ACCEPTS_PER_WINDOW = 5;
 
-interface PairingCallablePolicy {
-  enforceAppCheck: boolean;
+export type PairingErrorCode =
+  | "aborted"
+  | "already-exists"
+  | "cancelled"
+  | "data-loss"
+  | "deadline-exceeded"
+  | "failed-precondition"
+  | "internal"
+  | "invalid-argument"
+  | "not-found"
+  | "out-of-range"
+  | "permission-denied"
+  | "resource-exhausted"
+  | "unauthenticated"
+  | "unavailable"
+  | "unimplemented"
+  | "unknown";
+
+// A rejection the Pairing callable protocol reports to the client with its code.
+export class PairingError extends Error {
+  constructor(
+    readonly code: PairingErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PairingError";
+  }
+}
+
+// The verified caller of one Pairing request; `auth` is absent when no ID token
+// was sent.
+export interface PairingRequest {
+  auth:
+    | {
+        token: { firebase?: { sign_in_provider?: string } | null };
+        uid: string;
+      }
+    | undefined;
+  data: unknown;
 }
 
 interface GoogleDisplayIdentity {
@@ -57,7 +89,7 @@ type InviteLookup =
       kind: "OPEN";
     }
   | {
-      code: FunctionsErrorCode;
+      code: PairingErrorCode;
       kind: "REJECTED";
       message: string;
     };
@@ -78,22 +110,17 @@ interface PendingPairExpiry {
   partnerMembershipReference: DocumentReference;
 }
 
-export function createPairingCallables(policy: PairingCallablePolicy) {
-  const callableOptions = {
-    enforceAppCheck: policy.enforceAppCheck,
-    region: "us-central1",
-  } as const;
+export const pairingHandlers = {
+  acceptPairInvite,
+  confirmPair,
+  createPairInvite,
+  getPairingStatus,
+};
 
-  return {
-    acceptPairInvite: onCall(callableOptions, acceptPairInvite),
-    confirmPair: onCall(callableOptions, confirmPair),
-    createPairInvite: onCall(callableOptions, createPairInvite),
-    getPairingStatus: onCall(callableOptions, getPairingStatus),
-  };
-}
+export type PairingHandlerName = keyof typeof pairingHandlers;
 
 async function confirmPair(
-  request: CallableRequest<unknown>,
+  request: PairingRequest,
 ): Promise<
   PairingStatusResult & { partnerConfirmed: boolean; selfConfirmed: boolean }
 > {
@@ -125,7 +152,7 @@ async function confirmPair(
         pairData?.state !== "ACTIVE") ||
       members === null
     ) {
-      throw new HttpsError("failed-precondition", "The Pair cannot be confirmed.");
+      throw new PairingError("failed-precondition", "The Pair cannot be confirmed.");
     }
     const selfIndex = members.findIndex(
       (candidate) => candidate.uid === authenticatedIdentity.uid,
@@ -134,11 +161,11 @@ async function confirmPair(
       (candidate) => candidate.uid !== authenticatedIdentity.uid,
     );
     if (selfIndex < 0 || partnerIndex < 0) {
-      throw new HttpsError("permission-denied", "The Member is not in this Pair.");
+      throw new PairingError("permission-denied", "The Member is not in this Pair.");
     }
     const partner = members[partnerIndex];
     if (partner === undefined) {
-      throw new HttpsError("data-loss", "The Pair has no Partner.");
+      throw new PairingError("data-loss", "The Pair has no Partner.");
     }
     const partnerApprovalReference = database.doc(
       `memberApprovals/${partner.uid}`,
@@ -202,7 +229,7 @@ async function confirmPair(
   });
 
   if (outcome.kind === "EXPIRED") {
-    throw new HttpsError(
+    throw new PairingError(
       "deadline-exceeded",
       "The pending Pair confirmation has expired.",
     );
@@ -211,7 +238,7 @@ async function confirmPair(
 }
 
 async function getPairingStatus(
-  request: CallableRequest<unknown>,
+  request: PairingRequest,
 ): Promise<GetPairingStatusResult> {
   requireEmptyObject(request.data);
   const authenticatedIdentity = await requireAuthenticatedGoogleIdentity(request);
@@ -235,7 +262,7 @@ async function getPairingStatus(
 
     const pairId = normalizedIdentityField(membership.data()?.pairId);
     if (pairId === null) {
-      throw new HttpsError("data-loss", "The Pair membership is malformed.");
+      throw new PairingError("data-loss", "The Pair membership is malformed.");
     }
     requireMatchingMembership(membership.data(), pairId);
     const pairReference = database.doc(`pairs/${pairId}`);
@@ -247,7 +274,7 @@ async function getPairingStatus(
         pairData?.state !== "ACTIVE") ||
       members === null
     ) {
-      throw new HttpsError("data-loss", "The Pair is malformed.");
+      throw new PairingError("data-loss", "The Pair is malformed.");
     }
     const self = members.find(
       (candidate) => candidate.uid === authenticatedIdentity.uid,
@@ -256,7 +283,7 @@ async function getPairingStatus(
       (candidate) => candidate.uid !== authenticatedIdentity.uid,
     );
     if (self === undefined || partner === undefined) {
-      throw new HttpsError("permission-denied", "The Member is not in this Pair.");
+      throw new PairingError("permission-denied", "The Member is not in this Pair.");
     }
 
     const partnerApprovalReference = database.doc(
@@ -273,7 +300,7 @@ async function getPairingStatus(
     if (pairData.state === "PENDING_CONFIRMATION") {
       const confirmationExpiresAt = asTimestamp(pairData.confirmationExpiresAt);
       if (confirmationExpiresAt === null) {
-        throw new HttpsError("data-loss", "The pending Pair has no expiry.");
+        throw new PairingError("data-loss", "The pending Pair has no expiry.");
       }
       if (confirmationExpiresAt.toMillis() <= now.toMillis()) {
         expirePendingPair(transaction, {
@@ -302,7 +329,7 @@ async function getPairingStatus(
 }
 
 async function acceptPairInvite(
-  request: CallableRequest<unknown>,
+  request: PairingRequest,
 ): Promise<PairingStatusResult> {
   const acceptingIdentity = await requireAuthenticatedGoogleIdentity(request);
   const database = pairingDatabase();
@@ -426,7 +453,7 @@ async function acceptPairInvite(
   });
 
   if (outcome.kind === "REJECTED") {
-    throw new HttpsError(outcome.code, outcome.message);
+    throw new PairingError(outcome.code, outcome.message);
   }
   return {
     pairId: pairReference.id,
@@ -436,7 +463,7 @@ async function acceptPairInvite(
 }
 
 async function createPairInvite(
-  request: CallableRequest<unknown>,
+  request: PairingRequest,
 ): Promise<CreatePairInviteResult> {
   requireEmptyObject(request.data);
   const authenticatedIdentity = await requireAuthenticatedGoogleIdentity(request);
@@ -466,13 +493,13 @@ async function createPairInvite(
 
     requireApproval(approval.data());
     if (membership.exists) {
-      throw new HttpsError(
+      throw new PairingError(
         "failed-precondition",
         "A Member with Pair membership cannot create a Pair Invite.",
       );
     }
     if (invite.exists) {
-      throw new HttpsError("aborted", "Please retry Pair Invite creation.");
+      throw new PairingError("aborted", "Please retry Pair Invite creation.");
     }
 
     const rate = nextCreateRate(rateLimit.data(), now);
@@ -493,10 +520,10 @@ async function createPairInvite(
 }
 
 async function requireAuthenticatedGoogleIdentity(
-  request: CallableRequest<unknown>,
+  request: PairingRequest,
 ): Promise<AuthenticatedGoogleIdentity> {
   if (request.auth === undefined) {
-    throw new HttpsError("unauthenticated", "Sign in to use Pairing.");
+    throw new PairingError("unauthenticated", "Sign in to use Pairing.");
   }
 
   const firebaseClaims = request.auth.token.firebase;
@@ -505,7 +532,7 @@ async function requireAuthenticatedGoogleIdentity(
     typeof firebaseClaims !== "object" ||
     firebaseClaims.sign_in_provider !== "google.com"
   ) {
-    throw new HttpsError(
+    throw new PairingError(
       "permission-denied",
       "Pairing requires a Google-authenticated identity.",
     );
@@ -518,7 +545,7 @@ async function requireAuthenticatedGoogleIdentity(
     (provider) => provider.providerId === "google.com",
   );
   if (googleProvider === undefined) {
-    throw new HttpsError(
+    throw new PairingError(
       "permission-denied",
       "Pairing requires a Google-authenticated identity.",
     );
@@ -526,7 +553,7 @@ async function requireAuthenticatedGoogleIdentity(
 
   const displayName = normalizedIdentityField(googleProvider.displayName);
   if (displayName === null) {
-    throw new HttpsError(
+    throw new PairingError(
       "failed-precondition",
       "The signed-in Google identity has no display name.",
     );
@@ -543,7 +570,7 @@ async function requireAuthenticatedGoogleIdentity(
 
 function requireApproval(data: FirebaseFirestore.DocumentData | undefined): void {
   if (data?.approved !== true) {
-    throw new HttpsError(
+    throw new PairingError(
       "permission-denied",
       "Administrator Member Approval is required.",
     );
@@ -557,7 +584,7 @@ function requireEmptyObject(data: unknown): void {
     Array.isArray(data) ||
     Object.keys(data).length !== 0
   ) {
-    throw new HttpsError("invalid-argument", "Expected an empty request.");
+    throw new PairingError("invalid-argument", "Expected an empty request.");
   }
 }
 
@@ -581,11 +608,11 @@ function requirePairIdData(data: unknown): string {
     Array.isArray(data) ||
     Object.keys(data).length !== 1
   ) {
-    throw new HttpsError("invalid-argument", "A Pair ID is required.");
+    throw new PairingError("invalid-argument", "A Pair ID is required.");
   }
   const pairId = normalizedIdentityField((data as Record<string, unknown>).pairId);
   if (pairId === null || pairId.includes("/")) {
-    throw new HttpsError("invalid-argument", "The Pair ID is invalid.");
+    throw new PairingError("invalid-argument", "The Pair ID is invalid.");
   }
   return pairId;
 }
@@ -626,14 +653,14 @@ function inspectOpenInvite(
   const creatorUid = normalizedIdentityField(data.creatorUid);
   const creatorIdentity = asGoogleDisplayIdentity(data.creatorIdentity);
   if (creatorUid === null || creatorIdentity === null) {
-    throw new HttpsError("data-loss", "The Pair Invite is malformed.");
+    throw new PairingError("data-loss", "The Pair Invite is malformed.");
   }
   return { creatorIdentity, creatorUid, kind: "OPEN" };
 }
 
 function requireNoMembership(exists: boolean): void {
   if (exists) {
-    throw new HttpsError(
+    throw new PairingError(
       "failed-precondition",
       "The Member already has a Pair or pending Pair confirmation.",
     );
@@ -648,7 +675,7 @@ function requireMatchingMembership(
     data?.pairId !== pairId ||
     (data?.state !== "PENDING_CONFIRMATION" && data?.state !== "ACTIVE")
   ) {
-    throw new HttpsError(
+    throw new PairingError(
       "failed-precondition",
       "The Member does not have this Pair membership.",
     );
@@ -806,7 +833,7 @@ function nextCreateRate(
     now.toMillis() - previousWindow.toMillis() < CREATE_RATE_WINDOW_MILLIS;
   const previousCount = withinWindow ? asNonNegativeInteger(data?.createCount) : 0;
   if (previousCount >= MAX_INVITES_PER_WINDOW) {
-    throw new HttpsError(
+    throw new PairingError(
       "resource-exhausted",
       "Too many Pair Invites were created. Try again later.",
     );
@@ -825,7 +852,7 @@ function requireAcceptRateAvailable(
 ): void {
   const blockedUntil = asTimestamp(data?.acceptBlockedUntil);
   if (blockedUntil !== null && blockedUntil.toMillis() > now.toMillis()) {
-    throw new HttpsError(
+    throw new PairingError(
       "resource-exhausted",
       "Too many Pair Invite attempts. Try again later.",
     );
@@ -863,10 +890,6 @@ function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0
     ? value
     : 0;
-}
-
-function adminApp() {
-  return getApps().length === 0 ? initializeApp() : getApps()[0];
 }
 
 function pairingDatabase() {

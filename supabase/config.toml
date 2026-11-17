@@ -1,0 +1,17 @@
+# Supabase is used only to host the Pairing Edge Function (ADR-0007). There is no
+# Supabase database, auth or client SDK. The project ref is never committed:
+# `supabase link` stores it under supabase/.temp, which is ignored.
+project_id = "duit"
+
+[api]
+enabled = true
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+deno_version = 2
+
+# The Authorization header carries a Firebase ID token, not a Supabase JWT; the
+# function verifies it itself.
+[functions.pairing]
+verify_jwt = false

@@ -15,12 +15,13 @@ import {
 import {
   connectFunctionsEmulator,
   getFunctions,
-  httpsCallable,
+  httpsCallableFromURL,
 } from "firebase/functions";
 
 const projectId = "demo-duit";
 const [functionsHost = "127.0.0.1", functionsPort = "5001"] =
   (process.env.FUNCTIONS_EMULATOR_HOST ?? "127.0.0.1:5001").split(":");
+const pairingBaseUrl = process.env.PAIRING_BASE_URL ?? "http://127.0.0.1:5002";
 const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099";
 const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 
@@ -686,7 +687,10 @@ async function approve(uid, approved = true) {
 }
 
 async function call(client, functionName, data) {
-  const callable = httpsCallable(client.functions, functionName);
+  const callable = httpsCallableFromURL(
+    client.functions,
+    `${pairingBaseUrl}/${functionName}`,
+  );
   const result = await callable(data);
   return result.data;
 }

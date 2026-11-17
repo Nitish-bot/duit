@@ -27,3 +27,9 @@ functions/coverage/
 .env
 .env.*
 !.env.example
+
+# Supabase local state (the linked project ref lives in supabase/.temp) and secrets.
+supabase/.temp/
+supabase/.branches/
+supabase/functions/.env*
+supabase/.env*

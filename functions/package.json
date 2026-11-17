@@ -2,24 +2,22 @@
   "name": "duit-functions",
   "version": "0.1.0",
   "private": true,
-  "main": "lib/index.js",
   "engines": {
     "node": "22"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json && npm run build:development && tsc --project emulator/tsconfig.json",
-    "build:development": "tsc --project development/tsconfig.json",
+    "build": "tsc --project emulator/tsconfig.json",
     "test": "npm run test:boundaries && npm run test:emulator",
     "test:boundaries": "npm run build && node --test test/production-boundary.test.mjs test/development-boundary.test.mjs",
     "test:android-repository": "node test/run-firestore-android-repository.mjs",
-    "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project development/tsconfig.json --noEmit && tsc --project emulator/tsconfig.json --noEmit",
+    "typecheck": "tsc --project emulator/tsconfig.json --noEmit",
     "test:smoke": "node --test --test-concurrency=1 test/emulator-smoke.test.mjs test/firestore-access.test.mjs test/pairing-functions.test.mjs",
-    "test:emulator": "npm run build && firebase emulators:exec --config ../firebase.emulator.json --project demo-duit --only auth,functions,firestore \"npm run test:smoke\"",
-    "emulators:start": "npm run build && firebase emulators:start --config ../firebase.emulator.json --project demo-duit --only auth,functions,firestore"
+    "test:emulator": "npm run build && firebase emulators:exec --config ../firebase.emulator.json --project demo-duit --only auth,firestore \"node emulator/run-with-host.mjs npm run test:smoke\"",
+    "emulators:start": "npm run build && firebase emulators:exec --config ../firebase.emulator.json --project demo-duit --only auth,firestore \"node emulator/run-with-host.mjs --serve\"",
+    "deno:metadata-stub": "deno run -A emulator/tools/metadata-stub.ts"
   },
   "dependencies": {
-    "firebase-admin": "14.2.0",
-    "firebase-functions": "7.3.2"
+    "firebase-admin": "14.2.0"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "5.0.1",
