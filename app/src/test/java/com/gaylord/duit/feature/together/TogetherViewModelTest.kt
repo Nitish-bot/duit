@@ -1,6 +1,7 @@
 package com.gaylord.duit.feature.together
 
 import com.gaylord.duit.data.repository.TaskRepository
+import com.gaylord.duit.domain.model.TaskVisibility
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.model.OccurrenceKey
 import com.gaylord.duit.domain.model.OccurrenceState
@@ -589,6 +590,12 @@ private object EmptyTaskRepository : TaskRepository {
     override suspend fun putRecurringSeriesIfAbsent(
         creation: RecurringSeriesCreation,
     ): RecurringSeriesCreation = creation
+
+    override suspend fun putRecurringSeriesVisibility(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility,
+    ): RecurringSeriesCreation? = error("Not used by this test")
 
     override fun observeRecurringSeries(
         ownerIdentifier: MemberIdentifier,

@@ -1399,7 +1399,7 @@ private data class DailyTitleObservation(
     val subtaskLabels: List<String>,
 )
 
-private fun stableTaskIdentities(): TaskIdentityGenerator =
+internal fun stableTaskIdentities(): TaskIdentityGenerator =
     TaskIdentityGenerator { commandIdentifier ->
         InitialTaskIdentifiers(
             taskIdentifier = TaskIdentifier("task-${commandIdentifier.value}"),
@@ -1426,7 +1426,7 @@ private fun createWorkspace(
         reminders = reminders,
     )
 
-private class InMemoryTaskRepository : TaskRepository {
+internal class InMemoryTaskRepository : TaskRepository {
     private val creations =
         MutableStateFlow<Map<TaskIdentifier, StandaloneTaskCreation>>(emptyMap())
     private val recurringCreations =
@@ -1481,6 +1481,20 @@ private class InMemoryTaskRepository : TaskRepository {
 
         recurringCreations.value = recurringCreations.value + (taskIdentifier to creation)
         return creation
+    }
+
+    override suspend fun putRecurringSeriesVisibility(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility,
+    ): RecurringSeriesCreation? {
+        val existing =
+            recurringCreations.value[taskIdentifier]
+                ?.takeIf { it.series.ownerIdentifier == ownerIdentifier }
+                ?: return null
+        val updated = existing.copy(series = existing.series.copy(visibility = visibility))
+        recurringCreations.value = recurringCreations.value + (taskIdentifier to updated)
+        return updated
     }
 
     override fun observeRecurringSeries(

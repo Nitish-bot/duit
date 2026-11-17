@@ -16,6 +16,7 @@ import com.gaylord.duit.domain.model.RecurringSeries
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
 import com.gaylord.duit.domain.model.SeriesRevision
 import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
+import com.gaylord.duit.domain.model.ShareGeneration
 import com.gaylord.duit.domain.model.StandaloneTask
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
 import com.gaylord.duit.domain.model.SubtaskIdentifier
@@ -25,9 +26,11 @@ import com.gaylord.duit.domain.model.TaskReminderConfiguration
 import com.gaylord.duit.domain.model.TaskRevision
 import com.gaylord.duit.domain.model.TaskRevisionIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
+import com.gaylord.duit.domain.pairing.PairIdentifier
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.QuerySnapshot
@@ -47,6 +50,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.tasks.await
@@ -169,6 +173,32 @@ internal class FirestoreTaskRepository(
                     ownerIdentifier = creation.series.ownerIdentifier,
                     taskIdentifier = creation.series.identifier,
                 )
+            },
+        )
+    }
+
+    override suspend fun putRecurringSeriesVisibility(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility,
+    ): RecurringSeriesCreation? {
+        val paths = FirestoreTaskPaths(firestoreProvider(), ownerIdentifier)
+        val taskReference = paths.task(taskIdentifier)
+        readCachedRecurringSeriesOrNull(paths = paths, taskReference = taskReference)
+            ?: return null
+
+        val write = taskReference.update(FirestoreRecurringSeriesCodec.visibilityUpdate(visibility))
+
+        return awaitLocallyVisibleWrite(
+            commit = write,
+            taskIdentifier = taskIdentifier,
+            observeValue = {
+                observeRecurringSeries(
+                    ownerIdentifier = ownerIdentifier,
+                    taskIdentifier = taskIdentifier,
+                ).map { creation ->
+                    creation?.takeIf { it.series.visibility == visibility }
+                }
             },
         )
     }
@@ -752,6 +782,30 @@ private fun List<OccurrenceSubtaskState>.encodeOccurrenceSubtasks(): List<Map<St
         )
     }
 
+private fun TaskVisibility.encodeFields(): Map<String, Any> =
+    when (this) {
+        TaskVisibility.Private -> mapOf(VisibilityField to PrivateVisibility)
+        is TaskVisibility.Shared ->
+            mapOf(
+                VisibilityField to SharedVisibility,
+                SharePairIdentifierField to pairIdentifier.value,
+                ShareGenerationField to shareGeneration.value,
+                SharePartnerIdentifierField to partnerIdentifier.value,
+            )
+    }
+
+private fun Map<String, Any>.decodeVisibility(): TaskVisibility =
+    when (requiredString(VisibilityField)) {
+        PrivateVisibility -> TaskVisibility.Private
+        SharedVisibility ->
+            TaskVisibility.Shared(
+                pairIdentifier = PairIdentifier(requiredString(SharePairIdentifierField)),
+                shareGeneration = ShareGeneration(requiredString(ShareGenerationField)),
+                partnerIdentifier = MemberIdentifier(requiredString(SharePartnerIdentifierField)),
+            )
+        else -> error("Unsupported Task visibility")
+    }
+
 private fun List<Map<String, Any>>.decodeOccurrenceSubtasks(): List<OccurrenceSubtaskState> =
     map { subtask ->
         OccurrenceSubtaskState(
@@ -761,10 +815,20 @@ private fun List<Map<String, Any>>.decodeOccurrenceSubtasks(): List<OccurrenceSu
     }
 
 internal object FirestoreRecurringSeriesCodec {
-    fun encode(creation: RecurringSeriesCreation): FirestoreRecurringSeriesDocuments {
-        require(creation.series.visibility == TaskVisibility.Private) {
-            "The recurring Series slice persists Private Tasks only"
+    /** Fields to merge into the Task document; Private removes every grant field. */
+    fun visibilityUpdate(visibility: TaskVisibility): Map<String, Any> =
+        when (visibility) {
+            TaskVisibility.Private ->
+                mapOf(
+                    VisibilityField to PrivateVisibility,
+                    SharePairIdentifierField to FieldValue.delete(),
+                    ShareGenerationField to FieldValue.delete(),
+                    SharePartnerIdentifierField to FieldValue.delete(),
+                )
+            is TaskVisibility.Shared -> visibility.encodeFields()
         }
+
+    fun encode(creation: RecurringSeriesCreation): FirestoreRecurringSeriesDocuments {
         val daily = creation.initialRevision.recurrenceRule as? RecurrenceRule.Daily
             ?: error("Unsupported Recurrence Rule")
         val revision =
@@ -802,11 +866,10 @@ internal object FirestoreRecurringSeriesCodec {
                     OwnerIdentifierField to creation.series.ownerIdentifier.value,
                     ActiveRevisionIdentifierField to
                         creation.series.activeRevisionIdentifier.value,
-                    VisibilityField to PrivateVisibility,
                     CreatedAtInstantMillisField to creation.series.createdAt.instant.toEpochMilli(),
                     CreatedAtLocalDateField to creation.series.createdAt.localDate.toString(),
                     CreatedAtZoneIdentifierField to creation.series.createdAt.zoneId.id,
-                ),
+                ) + creation.series.visibility.encodeFields(),
             revision = revision,
         )
     }
@@ -819,9 +882,6 @@ internal object FirestoreRecurringSeriesCodec {
         revision.requireCurrentSchema()
         require(task.requiredString(TaskKindField) == RecurringSeriesTaskKind) {
             "Unsupported Task kind"
-        }
-        require(task.requiredString(VisibilityField) == PrivateVisibility) {
-            "Unsupported Task visibility"
         }
         require(revision.requiredString(RecurrenceKindField) == DailyRecurrenceKind) {
             "Unsupported Recurrence Rule"
@@ -848,7 +908,7 @@ internal object FirestoreRecurringSeriesCodec {
                     ownerIdentifier =
                         MemberIdentifier(task.requiredString(OwnerIdentifierField)),
                     activeRevisionIdentifier = revisionIdentifier,
-                    visibility = TaskVisibility.Private,
+                    visibility = task.decodeVisibility(),
                     createdAt =
                         MemberActionMoment(
                             instant =
@@ -1133,6 +1193,10 @@ private const val ActiveRevisionIdentifierField = "activeRevisionId"
 private const val RevisionIdentifierField = "revisionId"
 private const val VisibilityField = "visibility"
 private const val PrivateVisibility = "PRIVATE"
+private const val SharedVisibility = "SHARED"
+private const val SharePairIdentifierField = "sharePairId"
+private const val ShareGenerationField = "shareGeneration"
+private const val SharePartnerIdentifierField = "sharePartnerUid"
 private const val CreatedAtInstantMillisField = "createdAtInstantMillis"
 private const val CreatedAtLocalDateField = "createdAtLocalDate"
 private const val CreatedAtZoneIdentifierField = "createdAtZoneId"

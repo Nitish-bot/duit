@@ -1506,6 +1506,12 @@ private class AccessTestTaskRepository : TaskRepository {
         return creation
     }
 
+    override suspend fun putRecurringSeriesVisibility(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility,
+    ): RecurringSeriesCreation? = error("Not used by this test")
+
     override fun observeRecurringSeries(
         ownerIdentifier: MemberIdentifier,
     ): Flow<List<RecurringSeriesCreation>> =

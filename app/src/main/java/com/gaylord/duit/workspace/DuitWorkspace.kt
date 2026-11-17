@@ -14,6 +14,7 @@ import com.gaylord.duit.domain.model.RecurrenceRule
 import com.gaylord.duit.domain.model.RecurringSeries
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
 import com.gaylord.duit.domain.model.SeriesRevision
+import com.gaylord.duit.domain.model.ShareGeneration
 import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
 import com.gaylord.duit.domain.model.StandaloneTask
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
@@ -28,11 +29,15 @@ import com.gaylord.duit.domain.pairing.PairInvite
 import com.gaylord.duit.domain.pairing.PairIdentifier
 import com.gaylord.duit.domain.pairing.PairingStatus
 import com.gaylord.duit.domain.recurrence.RecurrenceEngine
+import com.gaylord.duit.domain.sharing.PartnerSharedDailyTask
+import com.gaylord.duit.domain.sharing.SharedDailyView
+import com.gaylord.duit.domain.sharing.SharedViewReference
 import com.gaylord.duit.notifications.ReminderGateway
 import com.gaylord.duit.notifications.ScheduledTaskReminder
 import com.gaylord.duit.pairing.PairingCallFailure
 import com.gaylord.duit.pairing.PairingCallResult
 import com.gaylord.duit.pairing.PairingGateway
+import com.gaylord.duit.sharing.SharedViewGateway
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDate
@@ -65,6 +70,7 @@ class DuitWorkspace private constructor(
     private val persistence: TaskRepository?,
     private val reminders: ReminderGateway?,
     private val pairing: PairingGateway?,
+    private val sharedViews: SharedViewGateway?,
     private val accessController: WorkspaceAccessController,
     private val memberDates: Flow<LocalDate>,
 ) {
@@ -76,6 +82,7 @@ class DuitWorkspace private constructor(
         persistence: TaskRepository,
         reminders: ReminderGateway,
         pairing: PairingGateway? = null,
+        sharedViews: SharedViewGateway? = null,
     ) : this(
         clock = clock,
         zoneProvider = zoneProvider,
@@ -83,6 +90,7 @@ class DuitWorkspace private constructor(
         persistence = persistence,
         reminders = reminders,
         pairing = pairing,
+        sharedViews = sharedViews,
         accessController = ReadyWorkspaceAccessController(memberIdentifier),
         memberDates = observeMemberDates(clock, zoneProvider),
     )
@@ -465,8 +473,156 @@ class DuitWorkspace private constructor(
                         command = command,
                     ),
                 )
+            is MemberCommand.ShareDailyTaskWithPartner ->
+                shareDailyTaskWithPartner(
+                    memberIdentifier = memberIdentifier,
+                    command = command,
+                )
+            is MemberCommand.MakeTaskPrivate ->
+                makeTaskPrivate(
+                    memberIdentifier = memberIdentifier,
+                    command = command,
+                )
         }
     }
+
+    /** The Partner's Shared Tasks for Together: read-only, and empty unless a Pair is active. */
+    fun observePartnerSharedTasks(): Flow<List<PartnerSharedDailyTask>> =
+        combine(accessState, pairingStatus) { state, status -> state to status }
+            .flatMapLatest { (state, status) ->
+                val active = status as? PairingStatus.Active
+                val partnerIdentifier = active?.partnerIdentifier
+                val gateway = sharedViews
+                if (
+                    state !is WorkspaceAccessState.Ready ||
+                    active == null ||
+                    partnerIdentifier == null ||
+                    gateway == null
+                ) {
+                    flowOf(emptyList())
+                } else {
+                    gateway.observePartnerSharedViews(
+                        pairIdentifier = active.pairIdentifier,
+                        partnerIdentifier = partnerIdentifier,
+                    )
+                }
+            }
+
+    private suspend fun shareDailyTaskWithPartner(
+        memberIdentifier: MemberIdentifier,
+        command: MemberCommand.ShareDailyTaskWithPartner,
+    ): MemberCommandOutcome {
+        val persistence = requireTaskPersistence()
+        val creation =
+            persistence.observeRecurringSeries(
+                ownerIdentifier = memberIdentifier,
+                taskIdentifier = command.taskIdentifier,
+            ).first()
+                ?: throw IllegalArgumentException("Recurring Series does not exist")
+        if (creation.series.visibility is TaskVisibility.Shared) {
+            return MemberCommandOutcome.TaskChanged(command.taskIdentifier)
+        }
+        val active =
+            pairingStatus.value as? PairingStatus.Active
+                ?: return MemberCommandOutcome.SharingUnavailable(
+                    command.taskIdentifier,
+                    SharingUnavailableReason.NotPaired,
+                )
+        val partnerIdentifier = active.partnerIdentifier
+        val gateway = sharedViews
+        if (partnerIdentifier == null || gateway == null) {
+            return MemberCommandOutcome.SharingUnavailable(
+                command.taskIdentifier,
+                SharingUnavailableReason.Unavailable,
+            )
+        }
+
+        val visibility =
+            TaskVisibility.Shared(
+                pairIdentifier = active.pairIdentifier,
+                shareGeneration = ShareGeneration(command.commandIdentifier.value),
+                partnerIdentifier = partnerIdentifier,
+            )
+        // The Owner's own record changes first, so a crash between the writes leaves a Task that
+        // is Shared locally with nothing published, never a published view the Owner cannot see.
+        persistence.putRecurringSeriesVisibility(memberIdentifier, command.taskIdentifier, visibility)
+        val revision = creation.initialRevision
+        gateway.publish(
+            SharedDailyView(
+                reference = visibility.referenceFor(memberIdentifier, command.taskIdentifier),
+                title = revision.title,
+                subtaskLabels = revision.subtaskTemplate.map(SubtaskTemplate::label),
+                everyDays = (revision.recurrenceRule as RecurrenceRule.Daily).everyDays,
+                startsOn = revision.startsOn,
+                endsOnInclusive = revision.endsOnInclusive,
+                sharedOn = currentMemberMoment().localDate,
+            ),
+        )
+        return MemberCommandOutcome.TaskChanged(command.taskIdentifier)
+    }
+
+    private suspend fun makeTaskPrivate(
+        memberIdentifier: MemberIdentifier,
+        command: MemberCommand.MakeTaskPrivate,
+    ): MemberCommandOutcome {
+        val persistence = requireTaskPersistence()
+        val creation =
+            persistence.observeRecurringSeries(
+                ownerIdentifier = memberIdentifier,
+                taskIdentifier = command.taskIdentifier,
+            ).first()
+                ?: throw IllegalArgumentException("Recurring Series does not exist")
+        val shared =
+            creation.series.visibility as? TaskVisibility.Shared
+                ?: return MemberCommandOutcome.TaskChanged(command.taskIdentifier)
+        try {
+            // Revoke the Partner's access first: if only one write survives a crash, the Owner
+            // still sees Shared while the Partner has nothing, never the reverse.
+            sharedViews?.revoke(shared.referenceFor(memberIdentifier, command.taskIdentifier))
+        } finally {
+            persistence.putRecurringSeriesVisibility(
+                memberIdentifier,
+                command.taskIdentifier,
+                TaskVisibility.Private,
+            )
+        }
+        return MemberCommandOutcome.TaskChanged(command.taskIdentifier)
+    }
+
+    /**
+     * Mirrors only the date of a completion into the current grant; Subtask state, times, zones
+     * and corrections never leave the Owner's workspace.
+     */
+    private suspend fun mirrorCompletedDate(
+        memberIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility?,
+        date: LocalDate,
+        completed: Boolean,
+    ) {
+        val shared = visibility as? TaskVisibility.Shared ?: return
+        val gateway = sharedViews ?: return
+        val reference = shared.referenceFor(memberIdentifier, taskIdentifier)
+        if (completed) {
+            gateway.setCompletedDate(reference, date)
+        } else {
+            gateway.clearCompletedDate(reference, date)
+        }
+    }
+
+    private suspend fun visibilityOf(
+        memberIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+    ): TaskVisibility? =
+        if (sharedViews == null) {
+            null
+        } else {
+            requireTaskPersistence()
+                .observeRecurringSeries(memberIdentifier, taskIdentifier)
+                .first()
+                ?.series
+                ?.visibility
+        }
 
     private suspend fun setOccurrenceSubtaskChecked(
         memberIdentifier: MemberIdentifier,
@@ -576,6 +732,13 @@ class DuitWorkspace private constructor(
                         state.invalidatedCompletionEpochs + completion.epoch,
                 ),
         )
+        mirrorCompletedDate(
+            memberIdentifier = memberIdentifier,
+            taskIdentifier = command.occurrenceKey.taskIdentifier,
+            visibility = visibilityOf(memberIdentifier, command.occurrenceKey.taskIdentifier),
+            date = command.occurrenceKey.nominalDate,
+            completed = false,
+        )
         return MemberCommandOutcome.OccurrenceCorrected(
             taskIdentifier = command.occurrenceKey.taskIdentifier,
             applied = true,
@@ -667,6 +830,13 @@ class DuitWorkspace private constructor(
                     invalidatedCompletionEpochs =
                         state.invalidatedCompletionEpochs + completion.epoch,
                 ),
+        )
+        mirrorCompletedDate(
+            memberIdentifier = memberIdentifier,
+            taskIdentifier = command.occurrenceKey.taskIdentifier,
+            visibility = visibilityOf(memberIdentifier, command.occurrenceKey.taskIdentifier),
+            date = command.occurrenceKey.nominalDate,
+            completed = false,
         )
         return command.occurrenceKey.taskIdentifier
     }
@@ -762,6 +932,13 @@ class DuitWorkspace private constructor(
                     actionableSubtasksBeforeCompletion = actionableSubtasksBeforeCompletion,
                     invalidatedCompletionEpochs = existing?.invalidatedCompletionEpochs.orEmpty(),
                 ),
+        )
+        mirrorCompletedDate(
+            memberIdentifier = memberIdentifier,
+            taskIdentifier = command.occurrenceKey.taskIdentifier,
+            visibility = creation.series.visibility,
+            date = command.occurrenceKey.nominalDate,
+            completed = true,
         )
         return MemberCommandOutcome.OccurrenceCompleted(
             taskIdentifier = command.occurrenceKey.taskIdentifier,
@@ -904,6 +1081,7 @@ class DuitWorkspace private constructor(
             hydration: OwnerWorkspaceHydrationGateway,
             persistedSession: PersistedWorkspaceSessionGateway,
             sessionOperations: WorkspaceSessionOperationCoordinator,
+            sharedViews: SharedViewGateway? = null,
         ): DuitWorkspace =
             DuitWorkspace(
                 clock = clock,
@@ -912,6 +1090,7 @@ class DuitWorkspace private constructor(
                 persistence = persistence,
                 reminders = reminders,
                 pairing = pairing,
+                sharedViews = sharedViews,
                 accessController =
                     AuthenticatedWorkspaceAccessController(
                         authentication = authentication,
@@ -979,6 +1158,17 @@ sealed interface MemberCommand {
         val occurrenceKey: OccurrenceKey,
         val completionEpoch: CompletionEpoch,
     ) : MemberCommand
+
+    /** Publishes the redacted Shared View to the current Partner under a fresh Share Grant. */
+    data class ShareDailyTaskWithPartner(
+        val commandIdentifier: CommandIdentifier,
+        val taskIdentifier: TaskIdentifier,
+    ) : MemberCommand
+
+    /** Revokes the current Share Grant. The Owner's change is immediate even while offline. */
+    data class MakeTaskPrivate(
+        val taskIdentifier: TaskIdentifier,
+    ) : MemberCommand
 }
 
 sealed interface MemberCommandOutcome {
@@ -1004,6 +1194,16 @@ sealed interface MemberCommandOutcome {
         override val taskIdentifier: TaskIdentifier,
         val applied: Boolean,
     ) : MemberCommandOutcome
+
+    data class SharingUnavailable(
+        override val taskIdentifier: TaskIdentifier,
+        val reason: SharingUnavailableReason,
+    ) : MemberCommandOutcome
+}
+
+enum class SharingUnavailableReason {
+    NotPaired,
+    Unavailable,
 }
 
 sealed interface PairCommand {
@@ -1339,6 +1539,18 @@ private fun TaskReminderConfiguration.toScheduledReminder(): ScheduledTaskRemind
         time = time,
         zoneId = zoneId,
         triggerAt = LocalDateTime.of(date, time).atZone(zoneId).toInstant(),
+    )
+
+private fun TaskVisibility.Shared.referenceFor(
+    ownerIdentifier: MemberIdentifier,
+    taskIdentifier: TaskIdentifier,
+): SharedViewReference =
+    SharedViewReference(
+        ownerIdentifier = ownerIdentifier,
+        pairIdentifier = pairIdentifier,
+        partnerIdentifier = partnerIdentifier,
+        taskIdentifier = taskIdentifier,
+        shareGeneration = shareGeneration,
     )
 
 private fun PairingCallFailure.toPairCommandFailure(): PairCommandFailure =

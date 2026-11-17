@@ -50,6 +50,7 @@ private fun buildRuntimeWorkspace(firebaseRuntime: FirebaseRuntime): DuitWorkspa
         persistence = workspaceServices?.tasks,
         reminders = workspaceServices?.reminders,
         pairing = workspaceServices?.pairing,
+        sharedViews = workspaceServices?.sharedViews,
         authentication = firebaseRuntime.authentication,
         approval = firebaseRuntime.approval,
         hydration = firebaseRuntime.hydration,

@@ -6,6 +6,7 @@ import com.gaylord.duit.domain.model.OccurrenceState
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
 import com.gaylord.duit.domain.model.TaskIdentifier
+import com.gaylord.duit.domain.model.TaskVisibility
 import java.time.LocalDate
 import kotlinx.coroutines.flow.Flow
 
@@ -41,6 +42,16 @@ interface TaskRepository {
     suspend fun putRecurringSeriesIfAbsent(
         creation: RecurringSeriesCreation,
     ): RecurringSeriesCreation
+
+    /**
+     * Durably changes the Visibility of one Owner's Recurring Series, leaving its definition and
+     * history untouched. Returns the stored creation, or null when the Owner has no such Series.
+     */
+    suspend fun putRecurringSeriesVisibility(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility,
+    ): RecurringSeriesCreation?
 
     fun observeRecurringSeries(
         ownerIdentifier: MemberIdentifier,

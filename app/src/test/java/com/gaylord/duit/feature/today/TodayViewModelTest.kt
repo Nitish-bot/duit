@@ -3,6 +3,7 @@ package com.gaylord.duit.feature.today
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import com.gaylord.duit.data.repository.TaskRepository
+import com.gaylord.duit.domain.model.TaskVisibility
 import com.gaylord.duit.domain.model.CompletionEpoch
 import com.gaylord.duit.domain.model.MemberActionMoment
 import com.gaylord.duit.domain.model.MemberIdentifier
@@ -521,6 +522,20 @@ private class TodayTestTaskRepository(
         recurringSeries.value[identifier]?.let { return it }
         recurringSeries.value = recurringSeries.value + (identifier to creation)
         return creation
+    }
+
+    override suspend fun putRecurringSeriesVisibility(
+        ownerIdentifier: MemberIdentifier,
+        taskIdentifier: TaskIdentifier,
+        visibility: TaskVisibility,
+    ): RecurringSeriesCreation? {
+        val existing =
+            recurringSeries.value[taskIdentifier]
+                ?.takeIf { it.series.ownerIdentifier == ownerIdentifier }
+                ?: return null
+        val updated = existing.copy(series = existing.series.copy(visibility = visibility))
+        recurringSeries.value = recurringSeries.value + (taskIdentifier to updated)
+        return updated
     }
 
     override fun observeRecurringSeries(

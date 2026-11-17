@@ -5,6 +5,7 @@ import com.gaylord.duit.data.repository.TaskRepository
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.notifications.ReminderGateway
 import com.gaylord.duit.pairing.PairingGateway
+import com.gaylord.duit.sharing.SharedViewGateway
 import com.gaylord.duit.workspace.AuthenticatedIdentity
 import com.gaylord.duit.workspace.AuthenticationGateway
 import com.gaylord.duit.workspace.AuthenticationSignOut
@@ -53,6 +54,7 @@ data class FirebaseWorkspaceServices(
     val tasks: TaskRepository,
     val reminders: ReminderGateway?,
     val pairing: PairingGateway,
+    val sharedViews: SharedViewGateway? = null,
 )
 
 interface FirebaseRuntime {

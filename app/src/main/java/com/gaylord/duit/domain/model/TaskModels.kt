@@ -1,5 +1,6 @@
 package com.gaylord.duit.domain.model
 
+import com.gaylord.duit.domain.pairing.PairIdentifier
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -32,8 +33,23 @@ value class CompletionEpoch(val value: String) {
     }
 }
 
+/** One Share Grant generation. Sharing a Task again always creates a different generation. */
+@JvmInline
+value class ShareGeneration(val value: String) {
+    init {
+        require(value.isNotBlank()) { "Share Generation must not be blank" }
+    }
+}
+
 sealed interface TaskVisibility {
     data object Private : TaskVisibility
+
+    /** The Task's redacted Shared View is readable by [partnerIdentifier] while this Pair is active. */
+    data class Shared(
+        val pairIdentifier: PairIdentifier,
+        val shareGeneration: ShareGeneration,
+        val partnerIdentifier: MemberIdentifier,
+    ) : TaskVisibility
 }
 
 data class MemberActionMoment(
