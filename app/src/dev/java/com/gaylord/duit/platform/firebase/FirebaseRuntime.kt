@@ -66,6 +66,7 @@ object FirebaseRuntimeFactory {
                             functions = { FirebaseFunctions.getInstance(firebaseApp) },
                             backendUrl = BuildConfig.PAIRING_BACKEND_URL,
                         ),
+                    sharedViews = FirestoreSharedViewGateway(firestoreSession::current),
                 ),
         )
     }
