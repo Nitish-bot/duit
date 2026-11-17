@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +40,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import com.gaylord.duit.domain.sharing.PartnerSharedDailyTask
 
 @Composable
 fun TogetherScreen(
@@ -287,6 +289,39 @@ fun TogetherScreen(
                         )
                     }
                 }
+                item {
+                    Text(
+                        text = stringResource(R.string.together_shared_heading),
+                        modifier = Modifier.semantics { heading() },
+                        color = MaterialTheme.colorScheme.onBackground,
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                }
+                if (state.sharedTasks.isEmpty()) {
+                    item {
+                        TogetherStateCard {
+                            Text(
+                                text =
+                                    stringResource(
+                                        R.string.together_shared_empty,
+                                        state.partnerIdentity.displayName,
+                                    ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                } else {
+                    items(
+                        items = state.sharedTasks,
+                        key = { task -> task.view.reference.taskIdentifier.value },
+                    ) { task ->
+                        PartnerSharedTaskCard(
+                            task = task,
+                            partnerName = state.partnerIdentity.displayName,
+                        )
+                    }
+                }
             }
             TogetherState.ConnectionRequired -> {
                 item {
@@ -359,3 +394,66 @@ private fun TogetherStateCard(content: @Composable () -> Unit) {
 }
 
 const val PairInviteCodeInputTag = "pair-invite-code-input"
+
+@Composable
+private fun PartnerSharedTaskCard(
+    task: PartnerSharedDailyTask,
+    partnerName: String,
+) {
+    val view = task.view
+    val schedule =
+        if (view.everyDays == 1) {
+            stringResource(R.string.together_shared_schedule_daily, view.startsOn)
+        } else {
+            stringResource(R.string.together_shared_schedule_interval, view.everyDays, view.startsOn)
+        }
+    TogetherStateCard {
+        Text(
+            text = view.title,
+            modifier = Modifier.semantics { heading() },
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = schedule,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        view.endsOnInclusive?.let { endsOn ->
+            Text(
+                text = stringResource(R.string.together_shared_schedule_until, endsOn),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (view.subtaskLabels.isNotEmpty()) {
+            Text(
+                text =
+                    stringResource(
+                        R.string.together_shared_subtasks,
+                        view.subtaskLabels.joinToString(", "),
+                    ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Text(
+            text =
+                if (task.completedDates.isEmpty()) {
+                    stringResource(R.string.together_shared_none_completed)
+                } else {
+                    stringResource(
+                        R.string.together_shared_completed_dates,
+                        task.completedDates.sortedDescending().joinToString(", "),
+                    )
+                },
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            text = stringResource(R.string.together_shared_readonly, partnerName),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}

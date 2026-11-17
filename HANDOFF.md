@@ -46,7 +46,7 @@ Tracker state:
 
 - Closed: #2, #3, #4, #5.
 - #6 is closed. Device evidence: `connectedDevDebugAndroidTest` 39 tests, 0 failed; the Firestore repository harness passed 7/7 twice.
-- #7 device acceptance is done (2026-11-17). Pairing moved from Cloud Functions to a Supabase Edge Function on the free plan (ADR-0007; Firestore, Auth, Rules and App Check are unchanged) and is deployed to the dev Supabase project. The two-phone drill passed: an unknown code and accepting one's own invite were refused, and an invite created on the Nothing Phone (4a) was accepted on the OnePlus with mutual confirmation, leaving both phones in an active Pair. Evidence: [issue #7 comment](https://github.com/Nitish-bot/duit/issues/7#issuecomment-6950024642). #7 is still open; closing it is the user's call. #8 (previously blocked by #7) is next; #10 (Cheer delivery; no Firestore triggers off Cloud Functions, so it becomes a client-invoked edge call, design in #10) follows #8.
+- #7 device acceptance is done (2026-11-17). Pairing moved from Cloud Functions to a Supabase Edge Function on the free plan (ADR-0007; Firestore, Auth, Rules and App Check are unchanged) and is deployed to the dev Supabase project. The two-phone drill passed: an unknown code and accepting one's own invite were refused, and an invite created on the Nothing Phone (4a) was accepted on the OnePlus with mutual confirmation, leaving both phones in an active Pair. Evidence: [issue #7 comment](https://github.com/Nitish-bot/duit/issues/7#issuecomment-6950024642). #7 is still open; closing it is the user's call. #8 (previously blocked by #7) has its Android and Rules half implemented (see "Shared Daily View"), awaiting the two-phone drill; #10 (Cheer delivery; no Firestore triggers off Cloud Functions, so it becomes a client-invoked edge call, design in #10) follows #8.
 - Watch item: Supabase pauses free projects after about a week of low activity. A paused project returns errors until resumed by hand in the dashboard, and Android shows the connection-required state. Check it is awake before any device session, and revisit hosting before production (#34, #36).
 - The dev build was installed on the test phone on 2026-11-15 and launches without a crash; Together was not exercised (no sign-in).
 - Dependency-unblocked next: #9.
@@ -103,6 +103,17 @@ Relevant files:
 - Correction preserves the Completion Epoch; leaving Complete invalidates it, and completing again creates a distinct epoch.
 - Future Nominal Dates and future completion times are rejected.
 - Today and Tasks are driven by `TodayViewModel` and `TasksViewModel`.
+
+### Shared Daily View (#8, Android and Rules done; two-phone drill pending)
+
+- Rules: `pairShares/{pairId}/owners/{ownerUid}/tasks/{taskId}` plus `.../grants/{generation}/completions/{date}` (committed earlier, covered by the Firestore Rules emulator tests). The Owner writes and deletes; only the current active Partner reads.
+- Domain: `TaskVisibility.Shared(pairIdentifier, shareGeneration, partnerIdentifier)` (the Partner id is stored so offline completion mirroring does not need a live Pairing call), `SharedDailyView` (title, Subtask labels, every-N-days, start/end, `sharedOn`; no reminders, Focus, checked state, negative outcomes, corrections, or times/zones), `PartnerSharedDailyTask` (view plus date-only completions).
+- `DuitWorkspace`: `ShareDailyTaskWithPartner` (needs an ACTIVE status with a known Partner id and a gateway; the command id is the new `ShareGeneration`), `MakeTaskPrivate`, date-only mirroring on Complete / Undo / correct-to-actionable, `observePartnerSharedTasks()`. Every Task still starts Private. Time-only completion corrections mirror nothing.
+- Offline order: sharing writes the Owner's visibility first, then publishes; going Private revokes remotely first, then flips local visibility (in a `finally`), so a crash between the two writes never leaves a published view the Owner cannot see. Remote writes are enqueued in Firestore's offline queue and not awaited.
+- `FirestoreSharedViewGateway` and `SharedViewCodec` live in the dev flavor only; the prod flavor has no gateway.
+- The Pairing backend now returns `partnerUid` in ACTIVE status. **Redeploy the `pairing` Edge Function** (`supabase functions deploy pairing --use-api`) before the drill; until then Android reports sharing as unavailable (Active status without a Partner id).
+- UI: Tasks detail has Share with Partner / Make Private (share only when paired; Make Private always when Shared) with honest stale-cache copy; Together ActivePair lists the Partner's Shared Tasks read-only. No Cheers (#10).
+- Remaining for #8: the two-phone drill (share, Partner sees it, complete/undo, Make Private while the Owner is offline then reconnect, re-share shows no old completions), and re-verifying that a former Partner cannot read after Unpair (Unpair itself is not built yet; a re-pair gets a fresh generation by construction).
 
 ### Pairing (#7, device acceptance done)
 

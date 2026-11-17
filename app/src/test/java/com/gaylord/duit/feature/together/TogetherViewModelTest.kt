@@ -27,6 +27,13 @@ import com.gaylord.duit.workspace.DuitWorkspace
 import com.gaylord.duit.workspace.InitialTaskIdentifiers
 import com.gaylord.duit.workspace.MemberApproval
 import com.gaylord.duit.workspace.MemberApprovalGateway
+import com.gaylord.duit.domain.model.ShareGeneration
+import com.gaylord.duit.domain.sharing.PartnerSharedDailyTask
+import com.gaylord.duit.domain.sharing.SharedDailyView
+import com.gaylord.duit.domain.sharing.SharedViewReference
+import com.gaylord.duit.sharing.InMemorySharedViewGateway
+import com.gaylord.duit.sharing.SharedViewGateway
+import com.gaylord.duit.workspace.StaticStatusPairingGateway
 import com.gaylord.duit.workspace.OwnerWorkspaceHydration
 import com.gaylord.duit.workspace.OwnerWorkspaceHydrationGateway
 import com.gaylord.duit.workspace.PersistedWorkspaceSessionGateway
@@ -524,9 +531,73 @@ class TogetherViewModelTest {
             refreshPolicy = refreshPolicy,
             epochMillis = epochMillis,
         )
+
+    @Test
+    fun `an active Pair shows the Partner's Shared Tasks read-only and updates live`() =
+        runTest {
+            val pairIdentifier = PairIdentifier("pair-sam-alex")
+            val reference =
+                SharedViewReference(
+                    ownerIdentifier = MemberIdentifier("member-sam"),
+                    pairIdentifier = pairIdentifier,
+                    partnerIdentifier = MemberIdentifier("member-alex"),
+                    taskIdentifier = TaskIdentifier("task-stretch"),
+                    shareGeneration = ShareGeneration("generation-1"),
+                )
+            val shared = InMemorySharedViewGateway()
+            shared.publish(
+                SharedDailyView(
+                    reference = reference,
+                    title = "Stretch",
+                    subtaskLabels = listOf("Hamstrings"),
+                    everyDays = 1,
+                    startsOn = LocalDate.of(2026, 8, 1),
+                    endsOnInclusive = null,
+                    sharedOn = LocalDate.of(2026, 8, 1),
+                ),
+            )
+            val workspace =
+                pairingWorkspace(
+                    gateway =
+                        StaticStatusPairingGateway(
+                            PairingStatus.Active(
+                                pairIdentifier,
+                                PartnerIdentity("Sam", null),
+                                MemberIdentifier("member-sam"),
+                            ),
+                        ),
+                    sharedViews = shared,
+                )
+            val viewModel = togetherViewModel(workspace)
+
+            viewModel.onEvent(TogetherEvent.Started)
+            runCurrent()
+
+            val active = viewModel.state.value as TogetherState.ActivePair
+            assertEquals(listOf("Stretch"), active.sharedTasks.map { it.view.title })
+            assertEquals(listOf("Hamstrings"), active.sharedTasks.single().view.subtaskLabels)
+            assertEquals(emptySet<LocalDate>(), active.sharedTasks.single().completedDates)
+
+            shared.setCompletedDate(reference, LocalDate.of(2026, 8, 9))
+            runCurrent()
+            assertEquals(
+                setOf(LocalDate.of(2026, 8, 9)),
+                (viewModel.state.value as TogetherState.ActivePair).sharedTasks.single().completedDates,
+            )
+
+            shared.revoke(reference)
+            runCurrent()
+            assertEquals(
+                emptyList<PartnerSharedDailyTask>(),
+                (viewModel.state.value as TogetherState.ActivePair).sharedTasks,
+            )
+        }
 }
 
-private fun pairingWorkspace(gateway: PairingGateway): DuitWorkspace =
+private fun pairingWorkspace(
+    gateway: PairingGateway,
+    sharedViews: SharedViewGateway? = null,
+): DuitWorkspace =
     DuitWorkspace(
         memberIdentifier = MemberIdentifier("member-alex"),
         clock = Clock.fixed(Instant.parse("2026-08-09T08:00:00Z"), ZoneId.of("UTC")),
@@ -543,6 +614,7 @@ private fun pairingWorkspace(gateway: PairingGateway): DuitWorkspace =
         persistence = EmptyTaskRepository,
         reminders = EmptyReminderGateway,
         pairing = gateway,
+        sharedViews = sharedViews,
     )
 
 private fun authenticatedPairingWorkspace(

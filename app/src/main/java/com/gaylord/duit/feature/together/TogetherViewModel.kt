@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.pairing.PairInvite
 import com.gaylord.duit.domain.pairing.PairingStatus
+import com.gaylord.duit.domain.sharing.PartnerSharedDailyTask
 import com.gaylord.duit.workspace.DuitWorkspace
 import com.gaylord.duit.workspace.PairCommand
 import com.gaylord.duit.workspace.PairCommandFailure
@@ -76,6 +77,8 @@ class TogetherViewModel internal constructor(
     private val mutableState = MutableStateFlow<TogetherState>(TogetherState.Loading)
     private var commandJob: Job? = null
     private var trackedRefreshJob: Job? = null
+    private var sharedTasksJob: Job? = null
+    private var latestSharedTasks: List<PartnerSharedDailyTask> = emptyList()
     private var togetherStarted = false
     private var activeInvite: PairInvite? = null
     private var activeInviteDeadlineEpochMillis: Long = 0
@@ -123,6 +126,9 @@ class TogetherViewModel internal constructor(
         if (!togetherStarted) return
         togetherStarted = false
         trackedRefreshJob?.cancel()
+        sharedTasksJob?.cancel()
+        sharedTasksJob = null
+        latestSharedTasks = emptyList()
     }
 
     private fun retry() {
@@ -224,10 +230,35 @@ class TogetherViewModel internal constructor(
             is PairingStatus.Active -> {
                 activeInvite = null
                 mutableState.value =
-                    TogetherState.ActivePair(status.pairIdentifier, status.partnerIdentity)
+                    TogetherState.ActivePair(
+                        pairIdentifier = status.pairIdentifier,
+                        partnerIdentity = status.partnerIdentity,
+                        sharedTasks = latestSharedTasks,
+                    )
             }
         }
         startTrackedRefreshIfNeeded()
+        updateSharedTasksObservation()
+    }
+
+    private fun updateSharedTasksObservation() {
+        val observing = togetherStarted && mutableState.value is TogetherState.ActivePair
+        if (!observing) {
+            sharedTasksJob?.cancel()
+            sharedTasksJob = null
+            latestSharedTasks = emptyList()
+            return
+        }
+        if (sharedTasksJob?.isActive == true) return
+        sharedTasksJob =
+            scope.launch {
+                workspace.observePartnerSharedTasks().collect { tasks ->
+                    latestSharedTasks = tasks
+                    (mutableState.value as? TogetherState.ActivePair)?.let { active ->
+                        mutableState.value = active.copy(sharedTasks = tasks)
+                    }
+                }
+            }
     }
 
     private fun startTrackedRefreshIfNeeded() {
@@ -296,6 +327,9 @@ class TogetherViewModel internal constructor(
         commandJob = null
         trackedRefreshJob?.cancel()
         trackedRefreshJob = null
+        sharedTasksJob?.cancel()
+        sharedTasksJob = null
+        latestSharedTasks = emptyList()
         activeInvite = null
         mutableState.value = TogetherState.Loading
         if (

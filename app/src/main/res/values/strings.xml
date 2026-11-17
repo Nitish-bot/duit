@@ -93,6 +93,15 @@
     <string name="together_waiting_body">You confirmed this identity. Duit will keep checking while Together is open.</string>
     <string name="together_active_title">Together with %1$s</string>
     <string name="together_active_body">Pairing is active. Your existing Tasks are still private until you choose to share them.</string>
+    <string name="together_shared_heading">Shared with you</string>
+    <string name="together_shared_empty">%1$s hasn’t shared any Tasks yet. They choose what you see.</string>
+    <string name="together_shared_readonly">Read-only. Only %1$s can change their Tasks.</string>
+    <string name="together_shared_schedule_daily">Every day from %1$s</string>
+    <string name="together_shared_schedule_interval">Every %1$d days from %2$s</string>
+    <string name="together_shared_schedule_until">Until %1$s</string>
+    <string name="together_shared_subtasks">Steps: %1$s</string>
+    <string name="together_shared_completed_dates">Completed on %1$s</string>
+    <string name="together_shared_none_completed">No completed days yet since sharing.</string>
     <string name="together_connection_required_title">Pairing needs a connection</string>
     <string name="together_connection_required_body">Pairing requires a connection. Your personal Tasks are still available.</string>
     <string name="together_recoverable_error_title">Couldn’t update Together</string>

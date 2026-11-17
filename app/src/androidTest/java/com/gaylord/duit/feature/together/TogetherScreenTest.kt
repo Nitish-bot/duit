@@ -12,7 +12,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.gaylord.duit.designsystem.DuitTheme
+import com.gaylord.duit.domain.model.MemberIdentifier
+import com.gaylord.duit.domain.model.ShareGeneration
+import com.gaylord.duit.domain.model.TaskIdentifier
 import com.gaylord.duit.domain.pairing.PairInvite
+import com.gaylord.duit.domain.sharing.PartnerSharedDailyTask
+import com.gaylord.duit.domain.sharing.SharedDailyView
+import com.gaylord.duit.domain.sharing.SharedViewReference
+import java.time.LocalDate
 import com.gaylord.duit.domain.pairing.PairIdentifier
 import com.gaylord.duit.domain.pairing.PartnerIdentity
 import org.junit.Assert.assertEquals
@@ -208,5 +215,49 @@ class TogetherScreenTest {
         composeRule.waitForIdle()
 
         assertEquals(1, closed)
+    }
+
+    @Test
+    fun activePairShowsPartnerSharedTaskReadOnlyWithoutPrivateDetail() {
+        val reference =
+            SharedViewReference(
+                ownerIdentifier = MemberIdentifier("member-sam"),
+                pairIdentifier = PairIdentifier("pair-1"),
+                partnerIdentifier = MemberIdentifier("member-alex"),
+                taskIdentifier = TaskIdentifier("task-stretch"),
+                shareGeneration = ShareGeneration("generation-1"),
+            )
+        composeRule.setContent {
+            DuitTheme(darkTheme = false) {
+                TogetherScreen(
+                    state =
+                        TogetherState.ActivePair(
+                            PairIdentifier("pair-1"),
+                            PartnerIdentity("Sam Rivera", null),
+                            listOf(
+                                PartnerSharedDailyTask(
+                                    view =
+                                        SharedDailyView(
+                                            reference = reference,
+                                            title = "Stretch",
+                                            subtaskLabels = listOf("Hamstrings"),
+                                            everyDays = 1,
+                                            startsOn = LocalDate.of(2026, 8, 1),
+                                            endsOnInclusive = null,
+                                            sharedOn = LocalDate.of(2026, 8, 1),
+                                        ),
+                                    completedDates = setOf(LocalDate.of(2026, 8, 9)),
+                                ),
+                            ),
+                        ),
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Stretch").assertIsDisplayed()
+        composeRule.onNodeWithText("Steps: Hamstrings").assertIsDisplayed()
+        composeRule.onNodeWithText("Completed on 2026-08-09").assertIsDisplayed()
+        composeRule.onNodeWithText("Read-only. Only Sam Rivera can change their Tasks.")
+            .assertIsDisplayed()
     }
 }

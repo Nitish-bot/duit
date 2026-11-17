@@ -3,6 +3,9 @@ package com.gaylord.duit.feature.tasks
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
@@ -27,6 +30,8 @@ import com.gaylord.duit.domain.model.OccurrenceSubtaskState
 import com.gaylord.duit.domain.model.RecurrenceRule
 import com.gaylord.duit.domain.model.SeriesRevision
 import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
+import com.gaylord.duit.domain.model.ShareGeneration
+import com.gaylord.duit.domain.pairing.PairIdentifier
 import com.gaylord.duit.domain.model.SubtaskIdentifier
 import com.gaylord.duit.domain.model.SubtaskTemplate
 import com.gaylord.duit.domain.model.TaskIdentifier
@@ -67,6 +72,61 @@ class TasksScreenTest {
             listOf(TasksEvent.SelectTask(DailyTaskIdentifier)),
             events.filterIsInstance<TasksEvent.SelectTask>(),
         )
+    }
+
+    @Test
+    fun pairedOwnerSharesAndRevokesThroughTypedEventsWithHonestOfflineCopy() {
+        val events = mutableListOf<TasksEvent>()
+        var state by mutableStateOf(detailState().copy(partnerName = "Sam"))
+        composeRule.setContent {
+            DuitTheme(darkTheme = false) {
+                TasksScreen(state = state, onEvent = events::add)
+            }
+        }
+
+        composeRule.onNodeWithText("Private. Only you can see this Task.").assertIsDisplayed()
+        composeRule.onNodeWithTag("tasks-share-with-partner").performClick()
+        composeRule.runOnIdle {
+            val detail = requireNotNull(state.selectedTask)
+            state =
+                state.copy(
+                    selectedTask =
+                        detail.copy(
+                            visibility =
+                                TaskVisibility.Shared(
+                                    PairIdentifier("pair-1"),
+                                    ShareGeneration("generation-1"),
+                                    MemberIdentifier("member-sam"),
+                                ),
+                        ),
+                )
+        }
+        composeRule.onNodeWithText("Shared with your Partner, read-only.").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Making this Task Private takes effect for you immediately, even offline. " +
+                "Your Partner’s phone may keep showing what it already received until it next syncs.",
+        ).assertIsDisplayed()
+        composeRule.onNodeWithTag("tasks-make-private").performClick()
+
+        assertEquals(
+            listOf(
+                TasksEvent.ShareWithPartner(DailyTaskIdentifier),
+                TasksEvent.MakePrivate(DailyTaskIdentifier),
+            ),
+            events.filter { it is TasksEvent.ShareWithPartner || it is TasksEvent.MakePrivate },
+        )
+    }
+
+    @Test
+    fun unpairedOwnerSeesNoShareAction() {
+        composeRule.setContent {
+            DuitTheme(darkTheme = false) {
+                TasksScreen(state = detailState())
+            }
+        }
+
+        composeRule.onNodeWithText("Sharing is available while you are paired.").assertIsDisplayed()
+        composeRule.onNodeWithTag("tasks-share-with-partner").assertDoesNotExist()
     }
 
     @Test
