@@ -1,8 +1,8 @@
 package com.gaylord.duit.platform.firebase
 
-import com.gaylord.duit.domain.pairing.PairInvite
 import com.gaylord.duit.domain.model.MemberIdentifier
 import com.gaylord.duit.domain.pairing.PairIdentifier
+import com.gaylord.duit.domain.pairing.PairInvite
 import com.gaylord.duit.domain.pairing.PairingStatus
 import com.gaylord.duit.domain.pairing.PartnerIdentity
 import com.gaylord.duit.pairing.PairingCallFailure

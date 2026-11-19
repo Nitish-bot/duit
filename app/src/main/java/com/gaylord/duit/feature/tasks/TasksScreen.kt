@@ -46,8 +46,8 @@ import com.gaylord.duit.domain.model.OccurrenceOutcome
 import com.gaylord.duit.domain.model.OccurrenceSubtaskState
 import com.gaylord.duit.domain.model.SubtaskIdentifier
 import com.gaylord.duit.domain.model.TaskVisibility
-import com.gaylord.duit.workspace.RecurringSeriesDetail
 import com.gaylord.duit.workspace.AgendaTask
+import com.gaylord.duit.workspace.RecurringSeriesDetail
 import com.gaylord.duit.workspace.RecurringSeriesLibraryEntry
 import com.gaylord.duit.feature.common.completionLocalTime
 import com.gaylord.duit.feature.common.completionTimeFormatter

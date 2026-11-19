@@ -9,6 +9,7 @@ import com.gaylord.duit.domain.sharing.PartnerSharedDailyTask
 import com.gaylord.duit.domain.sharing.SharedDailyView
 import com.gaylord.duit.domain.sharing.SharedViewReference
 import com.gaylord.duit.sharing.SharedViewGateway
+import com.google.android.gms.tasks.Task
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
@@ -151,7 +152,7 @@ internal class FirestoreSharedViewGateway(
 
     private fun enqueue(
         operation: String,
-        write: com.google.android.gms.tasks.Task<Void>,
+        write: Task<Void>,
     ) {
         write.addOnFailureListener { failure -> writeFailureReporter(operation, failure) }
     }

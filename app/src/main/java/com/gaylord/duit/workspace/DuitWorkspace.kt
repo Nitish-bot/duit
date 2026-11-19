@@ -14,8 +14,8 @@ import com.gaylord.duit.domain.model.RecurrenceRule
 import com.gaylord.duit.domain.model.RecurringSeries
 import com.gaylord.duit.domain.model.RecurringSeriesCreation
 import com.gaylord.duit.domain.model.SeriesRevision
-import com.gaylord.duit.domain.model.ShareGeneration
 import com.gaylord.duit.domain.model.SeriesRevisionIdentifier
+import com.gaylord.duit.domain.model.ShareGeneration
 import com.gaylord.duit.domain.model.StandaloneTask
 import com.gaylord.duit.domain.model.StandaloneTaskCreation
 import com.gaylord.duit.domain.model.SubtaskIdentifier
